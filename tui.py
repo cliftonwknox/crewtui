@@ -2412,8 +2412,12 @@ class CrewTUIApp(App):
                 panel.write(f"  [cyan]{key:18s}[/] {p['label']} via {p['provider']}")
 
         elif cmd == "/help":
-            panel = self.query_one(f"#panel-{self.current_agent}", AgentPanel)
+            first_agent = self._agent_ids[0] if self._agent_ids else self.current_agent
+            panel = self.query_one(f"#panel-{first_agent}", AgentPanel)
             panel.write(HELP_TEXT)
+            agent_cfg = next((a for a in self._agents_cfg if a["id"] == first_agent), None)
+            agent_name = agent_cfg["name"] if agent_cfg else first_agent
+            self.notify(f"Help written to {agent_name}'s panel on the Agents tab", severity="information")
 
         elif cmd == "/clear":
             panel = self.query_one(f"#panel-{self.current_agent}", AgentPanel)
@@ -2616,6 +2620,7 @@ class CrewTUIApp(App):
                     hb.cancel_task(matches[0]["id"])
                     panel.write(f"[yellow]Cancelled task #{tid_suffix}[/]")
                     self._load_queue_view()
+                    self.notify(f"Task #{tid_suffix} cancelled", severity="information")
                 elif len(matches) > 1:
                     panel.write(f"[yellow]Multiple matches for #{tid_suffix}. Be more specific.[/]")
                 else:
@@ -2625,6 +2630,7 @@ class CrewTUIApp(App):
                 removed = hb.clear_done()
                 panel.write(f"[green]Cleared {removed} done/failed/cancelled tasks.[/]")
                 self._load_queue_view()
+                self.notify(f"Cleared {removed} tasks", severity="information")
 
             elif sub == "remove":
                 tid = parts[2] if len(parts) > 2 else ""
@@ -2640,6 +2646,7 @@ class CrewTUIApp(App):
                         hb._save_queue(tasks_list)
                         panel.write(f"[yellow]Removed task #{tid}[/]")
                         self._load_queue_view()
+                        self.notify(f"Task #{tid} removed", severity="information")
                     elif len(matches) > 1:
                         panel.write(f"[yellow]Multiple matches for #{tid} — be more specific[/]")
                     else:
@@ -2797,6 +2804,7 @@ class CrewTUIApp(App):
                 self._reload_components()
                 panel.write(f"[yellow]Removed {tool_id} from {agent_id}[/]")
                 self._load_skills_view()
+                self.notify(f"Removed {tool_id} from {agent_id}", severity="information")
 
             elif sub == "new":
                 from config_loader import get_skills_dir
@@ -2876,8 +2884,12 @@ class CrewTUIApp(App):
                 if not job_id:
                     panel.write("[dim]Usage: /cron remove <id>[/]")
                 elif cron_engine.remove_cron(job_id.lstrip("#")):
-                    panel.write(f"[yellow]Cron job removed.[/]")
                     self._load_cron_view()
+                    try:
+                        self.query_one("#main-tabs", TabbedContent).active = "tab-cron"
+                    except Exception:
+                        pass
+                    self.notify(f"Cron job #{job_id.lstrip('#')} removed", severity="information")
                 else:
                     panel.write(f"[red]Job not found: {job_id}[/]")
 
@@ -2886,8 +2898,8 @@ class CrewTUIApp(App):
                 if not job_id:
                     panel.write("[dim]Usage: /cron on <id>[/]")
                 elif cron_engine.enable_cron(job_id.lstrip("#")):
-                    panel.write("[green]Cron job enabled.[/]")
                     self._load_cron_view()
+                    self.notify("Cron job enabled", severity="information")
                 else:
                     panel.write(f"[red]Job not found: {job_id}[/]")
 
@@ -2896,8 +2908,8 @@ class CrewTUIApp(App):
                 if not job_id:
                     panel.write("[dim]Usage: /cron off <id>[/]")
                 elif cron_engine.disable_cron(job_id.lstrip("#")):
-                    panel.write("[yellow]Cron job disabled.[/]")
                     self._load_cron_view()
+                    self.notify("Cron job disabled", severity="information")
                 else:
                     panel.write(f"[red]Job not found: {job_id}[/]")
 
@@ -3069,6 +3081,7 @@ class CrewTUIApp(App):
                         count += 1
                     panel.write(f"[yellow]Deleted {count} files from output.[/]")
                     self._refresh_file_list()
+                    self.notify(f"Deleted {count} files", severity="information")
                 else:
                     panel.write("[dim]No output directory.[/]")
             else:
@@ -3087,6 +3100,7 @@ class CrewTUIApp(App):
                 os.remove(filepath)
                 panel.write(f"[yellow]Deleted {os.path.basename(filepath)}[/]")
                 self._refresh_file_list()
+                self.notify(f"Deleted {os.path.basename(filepath)}", severity="information")
 
         elif cmd == "/view":
             arg = parts[1] if len(parts) > 1 else ""
@@ -3132,6 +3146,7 @@ class CrewTUIApp(App):
                         os.remove(fp)
                 panel.write(f"[yellow]Purged {count} files.[/]")
                 self._refresh_file_list()
+                self.notify(f"Purged {count} files", severity="information")
             else:
                 panel.write("[dim]No output directory.[/]")
 
