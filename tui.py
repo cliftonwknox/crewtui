@@ -112,8 +112,10 @@ HELP_TEXT = """[bold]Commands:[/]
   [cyan]/cron[/] on/off <id>     — Enable/disable a cron job
   [cyan]/cron[/] approve <id>    — Approve agent-proposed job
   [cyan]/cron[/] reject <id>     — Reject agent-proposed job
+  [cyan]/view[/] <number|name>   — View an output file
   [cyan]/delete[/] <file>        — Delete an output file
-  [cyan]/delete[/] all           — Delete all output files
+  [cyan]/purge[/]                — Delete all output files
+  [cyan]/docs[/] [section]       — Show documentation
   [cyan]/copy[/]                 — Copy current panel to clipboard (or Ctrl+Y)
   [cyan]/help[/]                 — Show this help
   [cyan]/clear[/]                — Clear current agent's log
@@ -563,6 +565,13 @@ class CrewTUIApp(App):
                              ("Anthropic (Claude direct API)", "anthropic")],
                             value="openai",
                             id="model-format-select",
+                        )
+                        yield Static("Assign to Agent [dim](optional)[/]")
+                        yield Select(
+                            [("None — save preset only", "")] +
+                            [(f"{a['name']} ({a['id']})", a['id']) for a in self._agents_cfg],
+                            prompt="Assign to agent...",
+                            id="model-agent-select",
                         )
                         yield Horizontal(
                             Button("Test", id="model-test-btn", variant="default"),
@@ -1057,8 +1066,20 @@ class CrewTUIApp(App):
                     self.query_one("#agent-goal-input", Input).value = agent.get("goal", "")
                     self.query_one("#agent-backstory-input", Input).value = agent.get("backstory", "")
                     self.query_one("#agent-tools-input", Input).value = ", ".join(agent.get("tools", []))
-                    self.query_one("#agent-keywords-input", Input).value = ""
+                    # Set preset select
+                    preset = agent.get("preset", "")
+                    try:
+                        self.query_one("#agent-preset-select", Select).value = preset
+                    except Exception:
+                        pass
+                    # Set color select
+                    color = agent.get("color", "white")
+                    try:
+                        self.query_one("#agent-color-select", Select).value = color
+                    except Exception:
+                        pass
                     # Load keywords from routing config
+                    self.query_one("#agent-keywords-input", Input).value = ""
                     routing = self._project_config.get("routing", {}).get("keywords", {})
                     if aid in routing:
                         self.query_one("#agent-keywords-input", Input).value = ", ".join(routing[aid])
@@ -1068,7 +1089,7 @@ class CrewTUIApp(App):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle preset select dropdown."""
-        if event.select.id == "model-preset-select" and event.value != Select.BLANK:
+        if event.select.id == "model-preset-select" and event.value != Select.NULL:
             key = str(event.value)
             presets = _load_model_presets()
             p = presets.get(key)
@@ -1105,7 +1126,7 @@ class CrewTUIApp(App):
         """Read current values from the model form."""
         try:
             fmt_select = self.query_one("#model-format-select", Select)
-            api_format = str(fmt_select.value) if fmt_select.value != Select.BLANK else "openai"
+            api_format = str(fmt_select.value) if fmt_select.value != Select.NULL else "openai"
         except Exception:
             api_format = "openai"
         return {
@@ -1124,15 +1145,19 @@ class CrewTUIApp(App):
         log.clear()
         form = self._get_model_form()
 
-        if not form["model"] or not form["base_url"]:
-            log.write("[red]Model ID and Base URL are required.[/]")
+        if not form["model"]:
+            log.write("[red]Model ID is required.[/]")
+            return
+        if not form["base_url"] and form.get("api_format") != "anthropic":
+            log.write("[red]Base URL is required (Anthropic format doesn't need one).[/]")
             return
 
         log.write("[yellow]Testing connection...[/]")
 
         def _do_test():
             try:
-                from model_wizard import build_llm_from_preset, _env_file
+                from crew import build_llm_from_preset
+                from model_wizard import _env_file
                 from dotenv import load_dotenv
                 load_dotenv(_env_file())
 
@@ -1140,7 +1165,7 @@ class CrewTUIApp(App):
                     "label": form["label"],
                     "model": form["model"],
                     "base_url": form["base_url"],
-                    "api_format": "openai",
+                    "api_format": form.get("api_format", "openai"),
                     "api_key_env": form["api_key_env"],
                     "provider": form["provider"],
                     "extra": {},
@@ -1182,6 +1207,7 @@ class CrewTUIApp(App):
             self.query_one("#model-url-input", Input).value = ""
             self.query_one("#model-key-input", Input).value = ""
             self.query_one("#model-provider-input", Input).value = ""
+            self.query_one("#model-format-select", Select).value = "openai"
             log = self.query_one("#model-result-log", RichLog)
             log.clear()
             log.write("[dim]Fill in the fields below to add a new model preset.[/]")
@@ -1198,6 +1224,8 @@ class CrewTUIApp(App):
             self.query_one("#agent-backstory-input", Input).value = ""
             self.query_one("#agent-tools-input", Input).value = ""
             self.query_one("#agent-keywords-input", Input).value = ""
+            self.query_one("#agent-preset-select", Select).value = Select.NULL
+            self.query_one("#agent-color-select", Select).value = Select.NULL
             log = self.query_one("#model-result-log", RichLog)
             log.clear()
             log.write("[dim]Fill in the fields below to add a new agent.[/]")
@@ -1248,14 +1276,23 @@ class CrewTUIApp(App):
         if not form["name"]:
             log.write("[red]Preset name is required.[/]")
             return
-        if not form["model"] or not form["base_url"]:
-            log.write("[red]Model ID and Base URL are required.[/]")
+        if not form["model"]:
+            log.write("[red]Model ID is required.[/]")
+            return
+        if not form["base_url"] and form.get("api_format") != "anthropic":
+            log.write("[red]Base URL is required (Anthropic format doesn't need one).[/]")
             return
 
-        from model_wizard import load_presets, save_custom_presets
+        from model_wizard import load_presets, save_custom_presets, BUILTIN_PRESETS
         presets = load_presets()
-        # Limit to 10 custom presets (built-ins don't count)
-        from model_wizard import BUILTIN_PRESETS
+
+        # Block overwriting built-in presets
+        if form["name"] in BUILTIN_PRESETS:
+            log.write(f"[red]Cannot overwrite built-in preset '{form['name']}'.[/]")
+            log.write("[dim]Use a different name to create a custom version.[/]")
+            return
+
+        # Limit to 10 custom presets
         custom_count = sum(1 for k in presets if k not in BUILTIN_PRESETS)
         if form["name"] not in presets and custom_count >= 10:
             log.write("[red]Maximum 10 custom model presets reached. Delete one first.[/]")
@@ -1275,7 +1312,7 @@ class CrewTUIApp(App):
         # Assign to agent if selected
         try:
             agent_select = self.query_one("#model-agent-select", Select)
-            agent_id = str(agent_select.value) if agent_select.value != Select.BLANK else ""
+            agent_id = str(agent_select.value) if agent_select.value != Select.NULL else ""
         except Exception:
             agent_id = ""
 
@@ -1323,7 +1360,7 @@ class CrewTUIApp(App):
         # Get preset
         try:
             preset_select = self.query_one("#agent-preset-select", Select)
-            preset = str(preset_select.value) if preset_select.value != Select.BLANK else ""
+            preset = str(preset_select.value) if preset_select.value != Select.NULL else ""
         except Exception:
             preset = ""
 
@@ -1334,7 +1371,7 @@ class CrewTUIApp(App):
         # Get color
         try:
             color_select = self.query_one("#agent-color-select", Select)
-            color = str(color_select.value) if color_select.value != Select.BLANK else "white"
+            color = str(color_select.value) if color_select.value != Select.NULL else "white"
         except Exception:
             color = "white"
 
@@ -1382,8 +1419,11 @@ class CrewTUIApp(App):
             config["routing"] = {"keywords": {}, "default_agent": agents[0]["id"]}
         if keywords:
             config["routing"]["keywords"][agent_id] = keywords
+        else:
+            config["routing"]["keywords"].pop(agent_id, None)
 
         save_project_config(config)
+        self._project_config = config
         self._agents_cfg = config["agents"]
         self._agent_ids = [a["id"] for a in self._agents_cfg]
         self._load_models_list()
@@ -1425,6 +1465,7 @@ class CrewTUIApp(App):
         routing.pop(agent_id, None)
 
         save_project_config(config)
+        self._project_config = config
         self._agents_cfg = config["agents"]
         self._agent_ids = [a["id"] for a in self._agents_cfg]
         self._load_models_list()
@@ -1800,7 +1841,7 @@ class CrewTUIApp(App):
                 return
             wiz["step"] = 4
             panel.write("[bold]Step 4/6:[/] What's the mission/prompt?")
-            panel.write("[dim]  e.g., research competitor pricing for compression socks[/]")
+            panel.write("[dim]  e.g., research competitor pricing in our market[/]")
 
         elif step == 4:  # Mission
             data["mission"] = answer
@@ -2169,7 +2210,6 @@ class CrewTUIApp(App):
                     if role.lower() in role_name.lower() or role_name.lower() in role.lower():
                         return aid
                 logger.info(f"Could not resolve agent: role='{role_name}', falling back to first agent")
-                logger.info(f"Could not resolve agent: role={role_name}")
                 return self._agent_ids[0] if self._agent_ids else ""
 
             def step_callback(step_output):
@@ -2196,7 +2236,7 @@ class CrewTUIApp(App):
                     output_text = output_text[:2000] + "\n[dim]... (truncated)[/]"
                 self.post_message(AgentStatus(agent_id, "[bold green]done[/]"))
                 self.post_message(AgentOutput(agent_id, f"[bold green]Task complete:[/]\n{output_text}"))
-                self._update_status_tab()
+                self.call_from_thread(self._update_status_tab)
 
             crew.step_callback = step_callback
             crew.task_callback = task_callback
@@ -2585,6 +2625,25 @@ class CrewTUIApp(App):
                 removed = hb.clear_done()
                 panel.write(f"[green]Cleared {removed} done/failed/cancelled tasks.[/]")
                 self._load_queue_view()
+
+            elif sub == "remove":
+                tid = parts[2] if len(parts) > 2 else ""
+                if not tid:
+                    panel.write("[dim]Usage: /queue remove <id>[/]")
+                else:
+                    tasks = hb.list_tasks()
+                    matches = [t for t in tasks if t["id"].endswith(tid.lstrip("#"))]
+                    if len(matches) == 1:
+                        hb.update_task(matches[0]["id"], status="cancelled")
+                        tasks_list = hb._load_queue()
+                        tasks_list = [t for t in tasks_list if t["id"] != matches[0]["id"]]
+                        hb._save_queue(tasks_list)
+                        panel.write(f"[yellow]Removed task #{tid}[/]")
+                        self._load_queue_view()
+                    elif len(matches) > 1:
+                        panel.write(f"[yellow]Multiple matches for #{tid} — be more specific[/]")
+                    else:
+                        panel.write(f"[red]Task #{tid} not found[/]")
 
             elif sub == "priority" or sub == "pri":
                 pri_parts = command.split()

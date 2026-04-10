@@ -37,20 +37,20 @@ BUILTIN_PRESETS = {
         "provider": "OpenAI",
         "extra": {},
     },
-    # --- Anthropic (direct) ---
+    # --- Anthropic (direct via LiteLLM native routing) ---
     "claude-sonnet": {
         "label": "Claude Sonnet 4",
         "model": "anthropic/claude-sonnet-4-20250514",
-        "base_url": "https://api.anthropic.com/v1",
+        "base_url": "",
         "api_format": "anthropic",
         "api_key_env": "ANTHROPIC_API_KEY",
         "provider": "Anthropic",
         "extra": {},
     },
     "claude-haiku": {
-        "label": "Claude Haiku 3.5",
-        "model": "anthropic/claude-3-5-haiku-20241022",
-        "base_url": "https://api.anthropic.com/v1",
+        "label": "Claude Haiku 4.5",
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "base_url": "",
         "api_format": "anthropic",
         "api_key_env": "ANTHROPIC_API_KEY",
         "provider": "Anthropic",
@@ -59,7 +59,7 @@ BUILTIN_PRESETS = {
     "claude-opus": {
         "label": "Claude Opus 4",
         "model": "anthropic/claude-opus-4-20250514",
-        "base_url": "https://api.anthropic.com/v1",
+        "base_url": "",
         "api_format": "anthropic",
         "api_key_env": "ANTHROPIC_API_KEY",
         "provider": "Anthropic",
@@ -185,7 +185,7 @@ BUILTIN_PRESETS = {
     "gemini": {
         "label": "Gemini 3 Flash",
         "model": "openai/gemini-3-flash-preview",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_format": "openai",
         "api_key_env": "GOOGLE_API_KEY",
         "provider": "Google",

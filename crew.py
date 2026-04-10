@@ -345,14 +345,26 @@ def build_llm_from_preset(preset_name: str, presets: dict) -> LLM:
     if not preset:
         raise ValueError(f"Unknown preset: {preset_name}")
     api_key = os.environ.get(preset["api_key_env"]) if preset.get("api_key_env") else "lm-studio"
-    return LLM(
-        model=preset["model"],
-        base_url=preset["base_url"],
-        api_key=api_key,
-        temperature=0.3,
-        max_tokens=4096,
+
+    # Ensure model ID has the correct routing prefix for LiteLLM
+    model = preset["model"]
+    api_format = preset.get("api_format", "openai")
+    if api_format == "anthropic" and not model.startswith("anthropic/"):
+        model = f"anthropic/{model}"
+    elif api_format == "openai" and not model.startswith(("openai/", "openrouter/", "anthropic/")):
+        model = f"openai/{model}"
+
+    kwargs = {
+        "model": model,
+        "api_key": api_key,
+        "temperature": 0.3,
+        "max_tokens": 4096,
         **preset.get("extra", {}),
-    )
+    }
+    # Only set base_url if provided (Anthropic native routing doesn't use one)
+    if preset.get("base_url"):
+        kwargs["base_url"] = preset["base_url"]
+    return LLM(**kwargs)
 
 
 def build_agents_from_config(project_config: dict, presets: dict) -> dict:

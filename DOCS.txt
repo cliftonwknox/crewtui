@@ -219,13 +219,82 @@ agent has tools assigned. CrewAI treats "manager" agents as
 hierarchical managers and blocks tool access. Use "coordinator",
 "lead", or "director" instead.
 
-Built-in model presets:
-  grok              Grok 4.1 Fast (xAI)
-  grok-reasoning    Grok 4.1 Reasoning (xAI)
-  kimi              Kimi K2.5 (NVIDIA)
-  local             Local model via LM Studio or Ollama
+Built-in model presets (21 total):
 
-Add custom presets with: crewtui models
+  OpenAI:
+    gpt-4o            GPT-4o
+    gpt-4o-mini       GPT-4o Mini
+    o1                OpenAI o1
+
+  Anthropic (direct API):
+    claude-sonnet     Claude Sonnet 4
+    claude-haiku      Claude Haiku 4.5
+    claude-opus       Claude Opus 4
+
+  OpenRouter (one key, many models):
+    openrouter-claude   Claude Sonnet via OpenRouter
+    openrouter-gpt4o    GPT-4o via OpenRouter
+    openrouter-llama    Llama 3.3 70B via OpenRouter
+
+  xAI:
+    grok              Grok 4.1 Fast
+    grok-reasoning    Grok Reasoning
+
+  DeepSeek:
+    deepseek          DeepSeek V3
+    deepseek-reasoning DeepSeek R1 Reasoning
+
+  Other cloud:
+    mistral           Mistral Large
+    groq-llama        Llama 3.3 70B on Groq (fast)
+    together-llama    Llama 3.3 70B on Together
+    kimi              Kimi K2.5 (NVIDIA)
+    qwen-plus         Qwen 3.6 Plus (Alibaba)
+    gemini            Gemini 3 Flash (Google)
+
+  Local (no API key needed):
+    lm-studio         LM Studio (port 1234)
+    ollama            Ollama (port 11434)
+
+Add custom models via the Models tab or: crewtui models
+
+
+MODELS TAB
+----------
+
+The Models tab lets you manage model presets and agents without
+editing config files.
+
+Left sidebar:
+  - Model presets with API key status and which agents use them
+  - Agents with their assigned preset and tool count
+  - Click any item to load it into the form for editing
+
+Model form:
+  - New Model button to clear the form for a fresh entry
+  - Load Existing Preset dropdown to copy a built-in template
+  - Fields: Preset Name, Display Label, Model ID, Base URL,
+    API Key Env Var, Provider Name, API Compatibility
+  - API Compatibility: OpenAI (most providers) or Anthropic
+  - Test button sends a test prompt to verify the connection
+  - Save button stores the preset (max 10 custom presets)
+  - Delete button removes custom presets (built-ins protected)
+
+Agent form:
+  - New Agent button to clear the form
+  - Fields: Agent ID, Display Name, Role, Goal, Backstory,
+    Model Preset, Tools, Color, Routing Keywords
+  - Tools are comma-separated (e.g., ddg_search, crewai:FileReadTool)
+  - Save button creates or updates the agent
+  - Delete button removes the agent (cannot delete last agent)
+  - Changes require /restart to take effect
+
+Custom models:
+  Any provider with an OpenAI-compatible or Anthropic-compatible
+  API can be added. Fill in the provider name, model ID, API key
+  environment variable, base URL, and select the API compatibility.
+  For OAuth providers, resolve the token externally and paste it
+  as an API key.
 
 
 TOOLS
