@@ -2,7 +2,6 @@
 
 import math
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Header,
     Footer,
@@ -14,7 +13,11 @@ from textual.widgets import (
     ListView,
     ListItem,
     Label,
+    Button,
+    Select,
+    Rule,
 )
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.binding import Binding
 from textual.message import Message
 import os
@@ -358,6 +361,63 @@ class CrewTUIApp(App):
         height: 1fr;
         padding: 1;
     }
+    #models-area {
+        height: 1fr;
+    }
+    #models-list-area {
+        width: 30;
+        height: 1fr;
+        border-right: solid $primary-background;
+        padding: 0 1;
+    }
+    #models-header {
+        height: 1;
+        padding: 0 1;
+    }
+    #models-list {
+        height: 1fr;
+    }
+    #models-list > ListItem {
+        padding: 0 1;
+        height: 1;
+    }
+    #agents-list {
+        height: 1fr;
+    }
+    #agents-list > ListItem {
+        padding: 0 1;
+        height: 1;
+    }
+    #agent-btn-bar {
+        height: 3;
+        margin: 1 0;
+    }
+    #agent-btn-bar Button {
+        margin: 0 1;
+    }
+    #models-form-area {
+        width: 1fr;
+        height: 1fr;
+        padding: 1 2;
+    }
+    #models-form-area Input {
+        margin: 0 0 1 0;
+    }
+    #models-form-area Select {
+        margin: 0 0 1 0;
+    }
+    #models-btn-bar {
+        height: 3;
+        margin: 1 0;
+    }
+    #models-btn-bar Button {
+        margin: 0 1;
+    }
+    #model-result-log {
+        height: auto;
+        max-height: 10;
+        padding: 0 1;
+    }
     #docs-area {
         height: 1fr;
     }
@@ -453,6 +513,81 @@ class CrewTUIApp(App):
                         for agent_cfg in self._agents_cfg:
                             info = get_agent_display(agent_cfg)
                             yield AgentPanel(agent_cfg["id"], info, id=f"panel-{agent_cfg['id']}")
+            with TabPane("Models", id="tab-models"):
+                with Horizontal(id="models-area"):
+                    # Left: existing presets + agents list
+                    with Vertical(id="models-list-area"):
+                        yield Static("[bold]Model Presets[/]", id="models-header")
+                        yield ListView(id="models-list")
+                        yield Rule()
+                        yield Static("[bold]Agents[/]")
+                        yield ListView(id="agents-list")
+                    # Right: forms
+                    with VerticalScroll(id="models-form-area"):
+                        # Model preset form
+                        yield Static("[bold cyan]Model Preset[/]", id="models-form-header")
+                        yield Static("[dim]Use existing preset:[/]")
+                        yield Select(
+                            [(f"{k} — {v['label']}", k) for k, v in _load_model_presets().items()],
+                            prompt="Select a preset to copy...",
+                            id="model-preset-select",
+                        )
+                        yield Static("[dim]Or configure manually:[/]")
+                        yield Static("Preset Name")
+                        yield Input(placeholder="e.g., my-grok, deepseek", id="model-name-input")
+                        yield Static("Display Label")
+                        yield Input(placeholder="e.g., DeepSeek V3", id="model-label-input")
+                        yield Static("Model ID")
+                        yield Input(placeholder="e.g., openai/deepseek-chat", id="model-id-input")
+                        yield Static("Base URL")
+                        yield Input(placeholder="e.g., https://api.deepseek.com/v1", id="model-url-input")
+                        yield Static("API Key Env Var")
+                        yield Input(placeholder="e.g., DEEPSEEK_API_KEY (blank for local)", id="model-key-input")
+                        yield Static("Provider")
+                        yield Input(placeholder="e.g., DeepSeek, Local, xAI", id="model-provider-input")
+                        yield Horizontal(
+                            Button("Test Model", id="model-test-btn", variant="default"),
+                            Button("Save Model", id="model-save-btn", variant="success"),
+                            id="models-btn-bar",
+                        )
+                        yield Rule()
+                        # Agent form
+                        yield Static("[bold cyan]Add / Edit Agent[/]")
+                        yield Static("Agent ID")
+                        yield Input(placeholder="e.g., researcher, writer (no spaces)", id="agent-id-input")
+                        yield Static("Display Name")
+                        yield Input(placeholder="e.g., Research Analyst", id="agent-name-input")
+                        yield Static("Role")
+                        yield Input(placeholder="e.g., Senior Research Analyst", id="agent-role-input")
+                        yield Static("Goal")
+                        yield Input(placeholder="e.g., Find and analyze information", id="agent-goal-input")
+                        yield Static("Backstory")
+                        yield Input(placeholder="e.g., Detail-oriented with 10 years experience", id="agent-backstory-input")
+                        yield Static("Model Preset")
+                        yield Select(
+                            [(f"{k} — {v['label']}", k) for k, v in _load_model_presets().items()],
+                            prompt="Select model preset...",
+                            id="agent-preset-select",
+                        )
+                        yield Static("Tools [dim](comma-separated)[/]")
+                        yield Input(placeholder="e.g., ddg_search, scrape_website, crewai:FileReadTool", id="agent-tools-input")
+                        yield Static("[dim]Built-in: ddg_search, tavily_search, scrape_website, cron_tool[/]")
+                        yield Static("[dim]CrewAI: crewai:FileReadTool, crewai:FileWriterTool, crewai:DirectoryReadTool[/]")
+                        yield Static("Color")
+                        yield Select(
+                            [("Cyan", "cyan"), ("Green", "green"), ("Yellow", "yellow"),
+                             ("Magenta", "magenta"), ("Blue", "blue"), ("Red", "red"), ("White", "white")],
+                            prompt="Select color...",
+                            id="agent-color-select",
+                        )
+                        yield Static("Routing Keywords [dim](comma-separated)[/]")
+                        yield Input(placeholder="e.g., research, analyze, data, search", id="agent-keywords-input")
+                        yield Horizontal(
+                            Button("Save Agent", id="agent-save-btn", variant="success"),
+                            Button("Delete Agent", id="agent-delete-btn", variant="error"),
+                            id="agent-btn-bar",
+                        )
+                        yield RichLog(id="model-result-log", highlight=True, markup=True, wrap=True)
             with TabPane("Files", id="tab-files"):
                 with Vertical(id="file-area"):
                     yield Horizontal(
@@ -535,6 +670,7 @@ class CrewTUIApp(App):
         self._load_queue_view()
         self._load_skills_view()
         self._load_cron_view()
+        self._load_models_list()
         self._load_docs_section("overview")
 
         # Start daemon if not already running — it handles heartbeat + telegram
@@ -821,6 +957,369 @@ class CrewTUIApp(App):
                 log.write(f"           [red]Error: {t['error'][:80]}[/]")
             if t.get("result") and t["status"] == "done":
                 log.write(f"           [green]Result: {t['result'][:80]}[/]")
+
+    def _load_models_list(self):
+        """Populate the models and agents lists."""
+        # Models
+        try:
+            models_list = self.query_one("#models-list", ListView)
+            models_list.clear()
+            presets = _load_model_presets()
+            for key, p in presets.items():
+                label = p.get("label", key)
+                api_key = p.get("api_key_env")
+                key_status = ""
+                if api_key:
+                    if os.environ.get(api_key):
+                        key_status = " [green]ok[/]"
+                    else:
+                        key_status = " [red]no key[/]"
+                users = [a["name"] for a in self._agents_cfg if a.get("preset") == key]
+                user_str = f" [dim]({', '.join(users)})[/]" if users else ""
+                item = ListItem(
+                    Label(f"[bold]{key}[/] {label}{key_status}{user_str}"),
+                    name=key,
+                )
+                models_list.append(item)
+        except Exception:
+            pass
+
+        # Agents
+        try:
+            agents_list = self.query_one("#agents-list", ListView)
+            agents_list.clear()
+            for a in self._agents_cfg:
+                color = a.get("color", "white")
+                preset = a.get("preset", "?")
+                tool_count = len(a.get("tools", []))
+                item = ListItem(
+                    Label(f"[{color}]{a['name']}[/] [dim]{preset} | {tool_count} tools[/]"),
+                    name=a["id"],
+                )
+                agents_list.append(item)
+        except Exception:
+            pass
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """When a preset or agent is highlighted, populate the form."""
+        if not event.item or not event.item.name:
+            return
+        try:
+            models_list = self.query_one("#models-list", ListView)
+            if event.list_view is models_list:
+                key = event.item.name
+                presets = _load_model_presets()
+                p = presets.get(key)
+                if p:
+                    self.query_one("#model-name-input", Input).value = key
+                    self.query_one("#model-label-input", Input).value = p.get("label", "")
+                    self.query_one("#model-id-input", Input).value = p.get("model", "")
+                    self.query_one("#model-url-input", Input).value = p.get("base_url", "")
+                    self.query_one("#model-key-input", Input).value = p.get("api_key_env", "") or ""
+                    self.query_one("#model-provider-input", Input).value = p.get("provider", "")
+                return
+        except Exception:
+            pass
+        try:
+            agents_list = self.query_one("#agents-list", ListView)
+            if event.list_view is agents_list:
+                aid = event.item.name
+                agent = next((a for a in self._agents_cfg if a["id"] == aid), None)
+                if agent:
+                    self.query_one("#agent-id-input", Input).value = agent["id"]
+                    self.query_one("#agent-name-input", Input).value = agent.get("name", "")
+                    self.query_one("#agent-role-input", Input).value = agent.get("role", "")
+                    self.query_one("#agent-goal-input", Input).value = agent.get("goal", "")
+                    self.query_one("#agent-backstory-input", Input).value = agent.get("backstory", "")
+                    self.query_one("#agent-tools-input", Input).value = ", ".join(agent.get("tools", []))
+                    self.query_one("#agent-keywords-input", Input).value = ""
+                    # Load keywords from routing config
+                    routing = self._project_config.get("routing", {}).get("keywords", {})
+                    if aid in routing:
+                        self.query_one("#agent-keywords-input", Input).value = ", ".join(routing[aid])
+                return
+        except Exception:
+            pass
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle preset select dropdown."""
+        if event.select.id == "model-preset-select" and event.value != Select.BLANK:
+            key = str(event.value)
+            presets = _load_model_presets()
+            p = presets.get(key)
+            if p:
+                try:
+                    self.query_one("#model-name-input", Input).value = key
+                    self.query_one("#model-label-input", Input).value = p.get("label", "")
+                    self.query_one("#model-id-input", Input).value = p.get("model", "")
+                    self.query_one("#model-url-input", Input).value = p.get("base_url", "")
+                    self.query_one("#model-key-input", Input).value = p.get("api_key_env", "") or ""
+                    self.query_one("#model-provider-input", Input).value = p.get("provider", "")
+                except Exception:
+                    pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle form buttons."""
+        if event.button.id == "model-test-btn":
+            self._test_model_preset()
+        elif event.button.id == "model-save-btn":
+            self._save_model_preset()
+        elif event.button.id == "agent-save-btn":
+            self._save_agent()
+        elif event.button.id == "agent-delete-btn":
+            self._delete_agent()
+
+    def _get_model_form(self) -> dict:
+        """Read current values from the model form."""
+        return {
+            "name": self.query_one("#model-name-input", Input).value.strip(),
+            "label": self.query_one("#model-label-input", Input).value.strip(),
+            "model": self.query_one("#model-id-input", Input).value.strip(),
+            "base_url": self.query_one("#model-url-input", Input).value.strip(),
+            "api_key_env": self.query_one("#model-key-input", Input).value.strip() or None,
+            "provider": self.query_one("#model-provider-input", Input).value.strip(),
+        }
+
+    def _test_model_preset(self):
+        """Test a model preset by sending a simple prompt."""
+        log = self.query_one("#model-result-log", RichLog)
+        log.clear()
+        form = self._get_model_form()
+
+        if not form["model"] or not form["base_url"]:
+            log.write("[red]Model ID and Base URL are required.[/]")
+            return
+
+        log.write("[yellow]Testing connection...[/]")
+
+        def _do_test():
+            try:
+                from model_wizard import build_llm_from_preset, _env_file
+                from dotenv import load_dotenv
+                load_dotenv(_env_file())
+
+                preset = {
+                    "label": form["label"],
+                    "model": form["model"],
+                    "base_url": form["base_url"],
+                    "api_format": "openai",
+                    "api_key_env": form["api_key_env"],
+                    "provider": form["provider"],
+                    "extra": {},
+                }
+                # Check API key
+                if form["api_key_env"]:
+                    key_val = os.environ.get(form["api_key_env"])
+                    if not key_val:
+                        self.call_from_thread(
+                            log.write,
+                            f"[red]{form['api_key_env']} not set in .env[/]"
+                        )
+                        return
+
+                presets = {form["name"]: preset}
+                llm = build_llm_from_preset(form["name"], presets)
+                response = llm.call(messages=[
+                    {"role": "user", "content": "Say 'hello' in one word."}
+                ])
+                resp_text = str(response)[:200] if response else "No response"
+                self.call_from_thread(
+                    log.write,
+                    f"[green]Connection successful![/]\nResponse: {resp_text}"
+                )
+            except Exception as e:
+                self.call_from_thread(
+                    log.write,
+                    f"[red]Test failed:[/] {str(e)[:300]}"
+                )
+
+        threading.Thread(target=_do_test, daemon=True).start()
+
+    def _save_model_preset(self):
+        """Save the model preset and optionally assign to agent."""
+        log = self.query_one("#model-result-log", RichLog)
+        log.clear()
+        form = self._get_model_form()
+
+        if not form["name"]:
+            log.write("[red]Preset name is required.[/]")
+            return
+        if not form["model"] or not form["base_url"]:
+            log.write("[red]Model ID and Base URL are required.[/]")
+            return
+
+        from model_wizard import load_presets, save_custom_presets
+        presets = load_presets()
+        presets[form["name"]] = {
+            "label": form["label"] or form["name"],
+            "model": form["model"],
+            "base_url": form["base_url"],
+            "api_format": "openai",
+            "api_key_env": form["api_key_env"],
+            "provider": form["provider"] or "Custom",
+            "extra": {},
+        }
+        save_custom_presets(presets)
+        log.write(f"[green]Preset '{form['name']}' saved.[/]")
+
+        # Assign to agent if selected
+        try:
+            agent_select = self.query_one("#model-agent-select", Select)
+            agent_id = str(agent_select.value) if agent_select.value != Select.BLANK else ""
+        except Exception:
+            agent_id = ""
+
+        if agent_id:
+            from config_loader import load_project_config, save_project_config
+            config = load_project_config()
+            for a in config.get("agents", []):
+                if a["id"] == agent_id:
+                    a["preset"] = form["name"]
+                    break
+            save_project_config(config)
+            agent_name = next((a["name"] for a in self._agents_cfg if a["id"] == agent_id), agent_id)
+            log.write(f"[green]Assigned to {agent_name}.[/]")
+            log.write("[dim]Restart to apply the model change.[/]")
+
+        self._load_models_list()
+
+    def _save_agent(self):
+        """Save an agent from the form fields."""
+        log = self.query_one("#model-result-log", RichLog)
+        log.clear()
+
+        try:
+            agent_id = self.query_one("#agent-id-input", Input).value.strip().lower().replace(" ", "_")
+            name = self.query_one("#agent-name-input", Input).value.strip()
+            role = self.query_one("#agent-role-input", Input).value.strip()
+            goal = self.query_one("#agent-goal-input", Input).value.strip()
+            backstory = self.query_one("#agent-backstory-input", Input).value.strip()
+            tools_str = self.query_one("#agent-tools-input", Input).value.strip()
+            keywords_str = self.query_one("#agent-keywords-input", Input).value.strip()
+        except Exception as e:
+            log.write(f"[red]Error reading form: {e}[/]")
+            return
+
+        if not agent_id or not name or not role:
+            log.write("[red]Agent ID, Name, and Role are required.[/]")
+            return
+
+        # Check manager restriction
+        if "manager" in agent_id or "manager" in role.lower():
+            log.write("[red]Warning: 'manager' in ID or role will block tool access in CrewAI.[/]")
+            log.write("[dim]Use 'coordinator', 'lead', or 'director' instead.[/]")
+            return
+
+        # Get preset
+        try:
+            preset_select = self.query_one("#agent-preset-select", Select)
+            preset = str(preset_select.value) if preset_select.value != Select.BLANK else ""
+        except Exception:
+            preset = ""
+
+        if not preset:
+            log.write("[red]Please select a model preset.[/]")
+            return
+
+        # Get color
+        try:
+            color_select = self.query_one("#agent-color-select", Select)
+            color = str(color_select.value) if color_select.value != Select.BLANK else "white"
+        except Exception:
+            color = "white"
+
+        # Parse tools
+        tools = [t.strip() for t in tools_str.split(",") if t.strip()] if tools_str else []
+
+        # Parse keywords
+        keywords = [k.strip().lower() for k in keywords_str.split(",") if k.strip()] if keywords_str else []
+
+        # Build agent config
+        agent_cfg = {
+            "id": agent_id,
+            "name": name,
+            "role": role,
+            "goal": goal,
+            "backstory": backstory,
+            "tools": tools,
+            "preset": preset,
+            "color": color,
+            "allow_delegation": False,
+        }
+
+        # Save to project config
+        from config_loader import load_project_config, save_project_config
+        config = load_project_config()
+        agents = config.get("agents", [])
+
+        # Check max agents
+        max_agents = config.get("max_agents", 10)
+        existing = next((i for i, a in enumerate(agents) if a["id"] == agent_id), None)
+        if existing is not None:
+            agents[existing] = agent_cfg
+            log.write(f"[green]Agent '{name}' updated.[/]")
+        else:
+            if len(agents) >= max_agents:
+                log.write(f"[red]Max agents ({max_agents}) reached.[/]")
+                return
+            agents.append(agent_cfg)
+            log.write(f"[green]Agent '{name}' created.[/]")
+
+        config["agents"] = agents
+
+        # Update routing keywords
+        if "routing" not in config:
+            config["routing"] = {"keywords": {}, "default_agent": agents[0]["id"]}
+        if keywords:
+            config["routing"]["keywords"][agent_id] = keywords
+
+        save_project_config(config)
+        self._agents_cfg = config["agents"]
+        self._agent_ids = [a["id"] for a in self._agents_cfg]
+        self._load_models_list()
+        log.write("[dim]Restart to activate the new agent.[/]")
+
+    def _delete_agent(self):
+        """Delete an agent."""
+        log = self.query_one("#model-result-log", RichLog)
+        log.clear()
+
+        try:
+            agent_id = self.query_one("#agent-id-input", Input).value.strip().lower()
+        except Exception:
+            log.write("[red]Enter the agent ID to delete.[/]")
+            return
+
+        if not agent_id:
+            log.write("[red]Enter the agent ID to delete.[/]")
+            return
+
+        from config_loader import load_project_config, save_project_config
+        config = load_project_config()
+        agents = config.get("agents", [])
+        before = len(agents)
+        agents = [a for a in agents if a["id"] != agent_id]
+
+        if len(agents) == before:
+            log.write(f"[red]Agent '{agent_id}' not found.[/]")
+            return
+
+        if len(agents) == 0:
+            log.write("[red]Cannot delete the last agent.[/]")
+            return
+
+        config["agents"] = agents
+
+        # Remove from routing
+        routing = config.get("routing", {}).get("keywords", {})
+        routing.pop(agent_id, None)
+
+        save_project_config(config)
+        self._agents_cfg = config["agents"]
+        self._agent_ids = [a["id"] for a in self._agents_cfg]
+        self._load_models_list()
+        log.write(f"[yellow]Agent '{agent_id}' deleted.[/]")
+        log.write("[dim]Restart to apply changes.[/]")
 
     def _load_docs_section(self, section: str = "overview"):
         """Load a section from DOCS.txt into the Docs tab."""
@@ -1286,10 +1785,17 @@ class CrewTUIApp(App):
             file_list.append(item)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Handle file selection in the file list."""
-        filename = event.item.name
-        if filename:
-            self._show_file(filename)
+        """Handle selection in list views (files, models)."""
+        if not event.item or not event.item.name:
+            return
+        # Determine which list was clicked
+        try:
+            file_list = self.query_one("#file-list", ListView)
+            if event.list_view is file_list:
+                self._show_file(event.item.name)
+                return
+        except Exception:
+            pass
 
     def _show_file(self, filename: str) -> None:
         """Display a file in the viewer panel."""
