@@ -3,16 +3,21 @@
 import os
 import json
 import sys
+import readline  # enables line editing, history, and arrow keys in input()
 
 COLORS = ["cyan", "green", "yellow", "magenta", "blue", "red", "white", "orange"]
 MAX_AGENTS = 10
 
 
-def _prompt(text, default=""):
-    if default:
-        result = input(f"  {text} [{default}]: ").strip()
-        return result if result else default
-    return input(f"  {text}: ").strip()
+def _prompt(text, default="", required=False):
+    while True:
+        if default:
+            result = input(f"  {text} [{default}]: ").strip()
+            return result if result else default
+        result = input(f"  {text}: ").strip()
+        if result or not required:
+            return result
+        print("  This field is required. Please enter a value.")
 
 
 def _prompt_yn(text, default=True):
@@ -104,8 +109,8 @@ def run_setup():
         used_ids.add(agent["id"])
 
     # Step 4: API keys
-    _banner("API Key Check")
-    _check_api_keys(agents, presets)
+    _banner("API Key Setup")
+    _check_api_keys(agents, presets, work_dir)
 
     # Step 5: Default tasks (optional)
     default_tasks = []
@@ -153,7 +158,7 @@ def run_setup():
 
 
 def _setup_agent(index: int, preset_keys: list, presets: dict, available_tools: dict, used_ids: set) -> dict:
-    """Configure a single agent."""
+    """Configure a single agent with review/edit step."""
     # ID
     while True:
         default_id = f"agent{index + 1}" if index > 0 else "leader"
@@ -162,47 +167,51 @@ def _setup_agent(index: int, preset_keys: list, presets: dict, available_tools: 
             print(f"  ID '{agent_id}' already taken. Pick another.")
             continue
         if "manager" in agent_id:
-            print(f"  ⚠ WARNING: CrewAI treats agents with 'manager' in the ID as hierarchical managers.")
+            print(f"  WARNING: CrewAI treats agents with 'manager' in the ID as hierarchical managers.")
             print(f"    These agents CANNOT have tools assigned. Consider 'coordinator' or 'lead' instead.")
             confirm = _prompt("  Keep this ID anyway? (y/n)", "n")
             if confirm.lower() != "y":
                 continue
         break
 
-    name = _prompt("Display name", agent_id.title())
+    name = _prompt("Display name", agent_id.replace("_", " ").title())
     role = _prompt("Role (what CrewAI sees)", name)
     if "manager" in role.lower() and "manager" not in agent_id:
-        print(f"  ⚠ WARNING: CrewAI may treat agents with 'manager' in the role as hierarchical managers.")
+        print(f"  WARNING: CrewAI may treat agents with 'manager' in the role as hierarchical managers.")
         print(f"    These agents cannot have tools. Consider 'coordinator' or 'lead' instead.")
-    goal = _prompt("Goal (1-2 sentences)")
-    backstory = _prompt("Backstory (personality/expertise)")
+    goal = _prompt("Goal (1-2 sentences)", f"Accomplish tasks as {role}", required=True)
+    backstory = _prompt("Backstory (personality/expertise)", f"An experienced {role}", required=True)
 
     # Model preset
     print(f"\n  Available model presets:")
     for i, key in enumerate(preset_keys, 1):
         p = presets[key]
         print(f"    {i}) {key:18s} {p['label']} via {p['provider']}")
+    print(f"\n  Enter a number (1-{len(preset_keys)}) or preset name.")
     while True:
         choice = _prompt("Model preset", preset_keys[0] if preset_keys else "")
-        if choice in presets or choice.isdigit():
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(preset_keys):
-                    choice = preset_keys[idx]
-                else:
-                    print("  Invalid number.")
-                    continue
+        if choice in presets:
             break
-        print(f"  Unknown preset. Use one of: {', '.join(preset_keys)}")
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(preset_keys):
+                choice = preset_keys[idx]
+                break
+            else:
+                print(f"  Invalid number. Enter 1-{len(preset_keys)}.")
+                continue
+        print(f"  Unknown preset. Enter a number or one of: {', '.join(preset_keys[:5])}...")
     preset = choice
 
     # Tools
-    print(f"\n  Available tools:")
     tool_list = sorted(available_tools.keys())
-    for i, tid in enumerate(tool_list, 1):
-        info = available_tools[tid]
-        print(f"    {i}) {tid} — {info['description'][:40]}")
-    tools_input = _prompt("Tools (numbers or IDs, comma-sep, blank=none)", "")
+    if tool_list:
+        print(f"\n  Available tools:")
+        for i, tid in enumerate(tool_list, 1):
+            info = available_tools[tid]
+            print(f"    {i}) {tid} -- {info['description'][:40]}")
+        print(f"\n  Enter numbers or IDs, comma-separated. Blank for none.")
+    tools_input = _prompt("Tools (comma-sep, blank=none)", "")
     tools = []
     if tools_input.strip():
         for part in tools_input.split(","):
@@ -223,7 +232,8 @@ def _setup_agent(index: int, preset_keys: list, presets: dict, available_tools: 
     # Delegation
     allow_delegation = _prompt_yn("Allow delegation?", index == 0)
 
-    return {
+    # Review
+    agent = {
         "id": agent_id,
         "name": name,
         "role": role,
@@ -235,12 +245,88 @@ def _setup_agent(index: int, preset_keys: list, presets: dict, available_tools: 
         "allow_delegation": allow_delegation,
     }
 
+    while True:
+        print(f"\n  --- Agent Summary ---")
+        fields = [
+            ("1", "ID", agent["id"]),
+            ("2", "Name", agent["name"]),
+            ("3", "Role", agent["role"]),
+            ("4", "Goal", agent["goal"][:60] + ("..." if len(agent["goal"]) > 60 else "")),
+            ("5", "Backstory", agent["backstory"][:60] + ("..." if len(agent["backstory"]) > 60 else "")),
+            ("6", "Preset", agent["preset"]),
+            ("7", "Tools", ", ".join(agent["tools"]) if agent["tools"] else "(none)"),
+            ("8", "Color", agent["color"]),
+            ("9", "Delegation", "yes" if agent["allow_delegation"] else "no"),
+        ]
+        for num, label, val in fields:
+            print(f"    {num}) {label:12s} {val}")
 
-def _check_api_keys(agents: list, presets: dict):
+        edit = _prompt("\n  Edit a field? (1-9, blank to confirm)", "")
+        if not edit:
+            break
+        if edit == "1":
+            new_id = _prompt("Agent ID", agent["id"]).lower().replace(" ", "_")
+            if new_id in used_ids and new_id != agent["id"]:
+                print(f"  ID '{new_id}' already taken.")
+            else:
+                agent["id"] = new_id
+        elif edit == "2":
+            agent["name"] = _prompt("Display name", agent["name"])
+        elif edit == "3":
+            agent["role"] = _prompt("Role", agent["role"])
+        elif edit == "4":
+            agent["goal"] = _prompt("Goal", agent["goal"], required=True)
+        elif edit == "5":
+            agent["backstory"] = _prompt("Backstory", agent["backstory"], required=True)
+        elif edit == "6":
+            new_preset = _prompt("Model preset", agent["preset"])
+            if new_preset in presets or new_preset.isdigit():
+                if new_preset.isdigit():
+                    idx = int(new_preset) - 1
+                    if 0 <= idx < len(preset_keys):
+                        new_preset = preset_keys[idx]
+                    else:
+                        print("  Invalid number.")
+                        continue
+                agent["preset"] = new_preset
+            else:
+                print("  Unknown preset.")
+        elif edit == "7":
+            tools_input = _prompt("Tools (comma-sep, blank=none)", ", ".join(agent["tools"]))
+            new_tools = []
+            if tools_input.strip():
+                for part in tools_input.split(","):
+                    part = part.strip()
+                    if part.isdigit():
+                        idx = int(part) - 1
+                        if 0 <= idx < len(tool_list):
+                            new_tools.append(tool_list[idx])
+                    elif part in available_tools:
+                        new_tools.append(part)
+            agent["tools"] = new_tools
+        elif edit == "8":
+            new_color = _prompt("Color", agent["color"])
+            if new_color in COLORS:
+                agent["color"] = new_color
+            else:
+                print(f"  Available: {', '.join(COLORS)}")
+        elif edit == "9":
+            agent["allow_delegation"] = _prompt_yn("Allow delegation?", agent["allow_delegation"])
+
+    return agent
+
+
+def _check_api_keys(agents: list, presets: dict, work_dir: str):
     """Check which API keys are needed and prompt for missing ones."""
     from dotenv import load_dotenv
-    env_file = os.path.join(os.path.dirname(__file__), ".env")
-    load_dotenv(env_file)
+
+    # Check both source dir and work dir for .env
+    source_env = os.path.join(os.path.dirname(__file__), ".env")
+    work_env = os.path.join(work_dir, ".env")
+
+    # Load existing .env files but don't let them override — we want to ask
+    load_dotenv(work_env, override=False)
+    load_dotenv(source_env, override=False)
 
     needed = {}
     for agent in agents:
@@ -265,33 +351,44 @@ def _check_api_keys(agents: list, presets: dict):
         print("  No API keys needed (all local models).")
         return
 
+    print("  The following API keys are needed:\n")
     env_updates = {}
     for env_var, info in needed.items():
         existing = os.environ.get(env_var)
         if existing:
-            print(f"  {env_var:25s} -> {info['provider']:15s} SET (used by: {', '.join(info['agents'])})")
+            masked = existing[:4] + "..." + existing[-4:] if len(existing) > 12 else "****"
+            print(f"  {env_var:25s} -> {info['provider']:15s} FOUND: {masked}")
+            print(f"    Used by: {', '.join(info['agents'])}")
+            if _prompt_yn(f"  Keep existing {env_var}?", True):
+                continue
+            # User wants to replace it
+            key = _prompt(f"Enter new {env_var}", required=True)
+            if key:
+                env_updates[env_var] = key
+                os.environ[env_var] = key
         else:
-            print(f"  {env_var:25s} -> {info['provider']:15s} MISSING (used by: {', '.join(info['agents'])})")
+            print(f"  {env_var:25s} -> {info['provider']:15s} MISSING")
+            print(f"    Used by: {', '.join(info['agents'])}")
             key = _prompt(f"Enter {env_var} (blank to skip)")
             if key:
                 env_updates[env_var] = key
                 os.environ[env_var] = key
 
     if env_updates:
-        # Append to .env
+        # Write to .env in source dir
         existing_env = {}
-        if os.path.exists(env_file):
-            with open(env_file) as f:
+        if os.path.exists(source_env):
+            with open(source_env) as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         existing_env[k.strip()] = v.strip()
         existing_env.update(env_updates)
-        with open(env_file, "w") as f:
+        with open(source_env, "w") as f:
             for k, v in existing_env.items():
                 f.write(f"{k}={v}\n")
-        os.chmod(env_file, 0o600)
+        os.chmod(source_env, 0o600)
         print(f"\n  Saved {len(env_updates)} key(s) to .env")
 
     # Test connections
