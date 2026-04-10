@@ -358,6 +358,29 @@ class CrewTUIApp(App):
         height: 1fr;
         padding: 1;
     }
+    #docs-area {
+        height: 1fr;
+    }
+    #docs-nav {
+        height: 3;
+        padding: 0 1;
+        background: $surface;
+    }
+    .docs-section {
+        width: auto;
+        padding: 0 2;
+        margin: 0 1;
+        height: 3;
+        content-align: center middle;
+    }
+    .docs-section-active {
+        background: $primary;
+        color: $text;
+    }
+    #docs-log {
+        height: 1fr;
+        padding: 1;
+    }
     """
 
     BINDINGS = [
@@ -454,6 +477,21 @@ class CrewTUIApp(App):
                 yield RichLog(id="cron-log", highlight=True, markup=True, wrap=True)
             with TabPane("Status", id="tab-status"):
                 yield RichLog(id="status-log", highlight=True, markup=True, wrap=True)
+            with TabPane("Docs", id="tab-docs"):
+                with Vertical(id="docs-area"):
+                    yield Horizontal(
+                        Static("[bold cyan] Overview [/]", id="docs-section-overview", classes="docs-section docs-section-active"),
+                        Static("[bold] Install [/]", id="docs-section-install", classes="docs-section"),
+                        Static("[bold] CLI [/]", id="docs-section-cli", classes="docs-section"),
+                        Static("[bold] TUI [/]", id="docs-section-tui", classes="docs-section"),
+                        Static("[bold] Telegram [/]", id="docs-section-telegram", classes="docs-section"),
+                        Static("[bold] Agents [/]", id="docs-section-agents", classes="docs-section"),
+                        Static("[bold] Tools [/]", id="docs-section-tools", classes="docs-section"),
+                        Static("[bold] Cron [/]", id="docs-section-cron", classes="docs-section"),
+                        Static("[bold] Troubleshoot [/]", id="docs-section-troubleshoot", classes="docs-section"),
+                        id="docs-nav",
+                    )
+                    yield RichLog(id="docs-log", highlight=True, markup=True, wrap=True)
 
         first_agent = self._agents_cfg[0] if self._agents_cfg else None
         first_color = first_agent.get("color", "cyan") if first_agent else "cyan"
@@ -497,6 +535,7 @@ class CrewTUIApp(App):
         self._load_queue_view()
         self._load_skills_view()
         self._load_cron_view()
+        self._load_docs_section("overview")
 
         # Start daemon if not already running — it handles heartbeat + telegram
         from daemon import is_running as daemon_is_running, start as daemon_start
@@ -782,6 +821,59 @@ class CrewTUIApp(App):
                 log.write(f"           [red]Error: {t['error'][:80]}[/]")
             if t.get("result") and t["status"] == "done":
                 log.write(f"           [green]Result: {t['result'][:80]}[/]")
+
+    def _load_docs_section(self, section: str = "overview"):
+        """Load a section from DOCS.txt into the Docs tab."""
+        try:
+            log = self.query_one("#docs-log", RichLog)
+        except Exception:
+            return
+        log.clear()
+
+        docs_path = os.path.join(os.path.dirname(__file__), "DOCS.txt")
+        if not os.path.exists(docs_path):
+            log.write("[red]DOCS.txt not found.[/]")
+            return
+
+        with open(docs_path) as f:
+            content = f.read()
+
+        # Map section names to DOCS.txt headers
+        section_map = {
+            "overview": "OVERVIEW",
+            "install": "INSTALLATION",
+            "cli": "CLI COMMANDS",
+            "tui": "TUI COMMANDS",
+            "telegram": "TELEGRAM COMMANDS",
+            "agents": "AGENTS AND MODELS",
+            "tools": "TOOLS",
+            "cron": "CRON SCHEDULING",
+            "troubleshoot": "TROUBLESHOOTING",
+        }
+
+        header = section_map.get(section, "OVERVIEW")
+
+        # Parse sections — they're separated by headers with underlines
+        sections = {}
+        current_name = None
+        current_lines = []
+        for line in content.split("\n"):
+            if line.strip() and set(line.strip()) <= {"-", "="}:
+                # This is an underline — previous line was a header
+                if current_lines and current_lines[-1].strip():
+                    if current_name:
+                        # Remove the header line from previous section
+                        sections[current_name] = "\n".join(current_lines[:-1])
+                    current_name = current_lines[-1].strip()
+                    current_lines = []
+                continue
+            current_lines.append(line)
+        if current_name:
+            sections[current_name] = "\n".join(current_lines)
+
+        text = sections.get(header, f"Section '{section}' not found.")
+        log.write(f"[bold cyan]{header}[/]\n")
+        log.write(text.strip())
 
     def _load_cron_view(self):
         import cron_engine
@@ -1211,16 +1303,23 @@ class CrewTUIApp(App):
             viewer.write(f"[bold red]Error reading file:[/] {e}")
 
     def on_click(self, event) -> None:
-        """Handle clicks on filter tabs."""
+        """Handle clicks on filter tabs and docs sections."""
         widget = event.widget if hasattr(event, 'widget') else None
-        if widget and hasattr(widget, 'id') and widget.id and widget.id.startswith("file-filter-"):
+        if not widget or not hasattr(widget, 'id') or not widget.id:
+            return
+        if widget.id.startswith("file-filter-"):
             filter_name = widget.id.replace("file-filter-", "")
             self._file_filter = filter_name
-            # Update active styling
             for child in self.query(".file-filter"):
                 child.remove_class("file-filter-active")
             widget.add_class("file-filter-active")
             self._refresh_file_list()
+        elif widget.id.startswith("docs-section-"):
+            section_name = widget.id.replace("docs-section-", "")
+            for child in self.query(".docs-section"):
+                child.remove_class("docs-section-active")
+            widget.add_class("docs-section-active")
+            self._load_docs_section(section_name)
 
     # === Message handlers ===
 
@@ -2355,6 +2454,14 @@ class CrewTUIApp(App):
                 self._refresh_file_list()
             else:
                 panel.write("[dim]No output directory.[/]")
+
+        elif cmd == "/docs":
+            section = parts[1].lower() if len(parts) > 1 else "overview"
+            self._load_docs_section(section)
+            try:
+                self.query_one("#main-tabs", TabbedContent).active = "tab-docs"
+            except Exception:
+                pass
 
         elif cmd == "/status":
             panel = self.query_one(f"#panel-{self.current_agent}", AgentPanel)

@@ -1,0 +1,40 @@
+{
+  "project": {
+    "name": "My Project",
+    "description": "Describe your project here",
+    "work_dir": "~/crewtui-projects/my-project"
+  },
+  "agents": [
+    {
+      "id": "lead",
+      "name": "Lead",
+      "role": "Project Lead",
+      "goal": "Coordinate the team and deliver results",
+      "backstory": "Experienced leader focused on outcomes",
+      "tools": ["ddg_search", "crewai:FileReadTool", "crewai:DirectoryReadTool"],
+      "preset": "grok",
+      "color": "cyan",
+      "allow_delegation": false
+    },
+    {
+      "id": "researcher",
+      "name": "Researcher",
+      "role": "Research Analyst",
+      "goal": "Find and analyze information thoroughly",
+      "backstory": "Detail-oriented analyst with strong research skills",
+      "tools": ["ddg_search", "scrape_website", "crewai:FileReadTool", "crewai:FileWriterTool"],
+      "preset": "grok",
+      "color": "yellow",
+      "allow_delegation": false
+    }
+  ],
+  "max_agents": 10,
+  "default_tasks": [],
+  "routing": {
+    "keywords": {
+      "lead": ["approve", "review", "decide", "delegate"],
+      "researcher": ["research", "analyze", "search", "find", "data"]
+    },
+    "default_agent": "lead"
+  }
+}

@@ -36,9 +36,9 @@ BUILTIN_PRESETS = {
         "provider": "xAI",
         "extra": {"additional_drop_params": ["stop"]},
     },
-    "grok-420": {
-        "label": "Grok 4.20 Reasoning",
-        "model": "openai/grok-4.20-0309-reasoning",
+    "grok-reasoning": {
+        "label": "Grok Reasoning",
+        "model": "openai/grok-4.1-fast-reasoning",
         "base_url": "https://api.x.ai/v1",
         "api_format": "openai",
         "api_key_env": "XAI_API_KEY",
