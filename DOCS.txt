@@ -1,4 +1,4 @@
-CREWTUI DOCUMENTATION
+STARLING DOCUMENTATION
 =====================
 
 Version 1.0
@@ -8,7 +8,7 @@ Last updated: 2026-04-09
 OVERVIEW
 --------
 
-CrewTUI is a config-driven terminal interface for managing multi-agent
+Starling is a config-driven terminal interface for managing multi-agent
 AI crews. You define agents with roles, goals, and tools. They work
 together on missions you assign — from the terminal, Telegram, or on
 a schedule.
@@ -29,18 +29,18 @@ Prerequisites:
 
 Steps:
   1. Clone the repository
-     git clone https://github.com/cliftonwknox/crewtui.git
-     cd crewtui
+     git clone https://github.com/cliftonwknox/starling.git
+     cd starling
 
   2. Install dependencies
      uv sync
      uv pip install -e .
 
   3. Run the setup wizard
-     uv run crewtui setup
+     uv run starling setup
 
   4. Launch the TUI
-     uv run crewtui
+     uv run starling
 
 The setup wizard creates:
   - project_config.json   Your agents, tools, and routing rules
@@ -52,13 +52,13 @@ The setup wizard creates:
 CLI COMMANDS
 ------------
 
-  crewtui              Launch the TUI (default)
-  crewtui setup        Run the first-time setup wizard
-  crewtui models       Manage model presets (list, add, remove, test)
-  crewtui telegram     Configure Telegram notifications
-  crewtui daemon on    Start the background daemon
-  crewtui daemon off   Stop the background daemon
-  crewtui daemon status Check daemon status
+  starling              Launch the TUI (default)
+  starling setup        Run the first-time setup wizard
+  starling models       Manage model presets (list, add, remove, test)
+  starling telegram     Configure Telegram notifications
+  starling daemon on    Start the background daemon
+  starling daemon off   Stop the background daemon
+  starling daemon status Check daemon status
 
 
 TUI COMMANDS
@@ -129,6 +129,11 @@ Memory:
   /remember <text>           Add a memory entry
   /forget <text>             Remove a memory entry
 
+Routing:
+  /routing status            Show routing mode, model, cache, and dedup stats
+  /routing rebuild           Re-embed all agent skill vectors
+  /routing test <desc>       Test which agent would handle a task
+
 Telegram:
   /telegram show             Show Telegram configuration
   /telegram on               Enable notifications
@@ -167,7 +172,7 @@ KEYBOARD SHORTCUTS
 TELEGRAM COMMANDS
 -----------------
 
-Send these to your CrewTUI Telegram bot:
+Send these to your Starling Telegram bot:
 
   /crew <mission>        Queue a full crew run
   /task <description>    Queue a single-agent task
@@ -197,7 +202,7 @@ keeps running after you close it.
   - Queue tasks are picked up every heartbeat interval (default 60s)
   - Reports are saved to the output directory and sent via Telegram
 
-The daemon stops when you run /daemon off or crewtui daemon off.
+The daemon stops when you run /daemon off or starling daemon off.
 It restarts fresh when you use /restart in the TUI.
 
 
@@ -256,7 +261,7 @@ Built-in model presets (21 total):
     lm-studio         LM Studio (port 1234)
     ollama            Ollama (port 11434)
 
-Add custom models via the Models tab or: crewtui models
+Add custom models via the Models tab or: starling models
 
 
 MODELS TAB
@@ -426,11 +431,11 @@ Telegram messages are cut off:
 
 Daemon won't stop:
   The daemon uses SIGKILL as a fallback if SIGTERM fails.
-  Run: crewtui daemon off
-  Or manually: kill -9 <pid> && rm crewtui_daemon.pid
+  Run: starling daemon off
+  Or manually: kill -9 <pid> && rm starling_daemon.pid
 
 Zombie TUI processes:
-  CrewTUI auto-kills orphaned processes on startup. If you see
+  Starling auto-kills orphaned processes on startup. If you see
   old processes, just restart and they'll be cleaned up.
 
 Reports not appearing in Files tab:

@@ -1,8 +1,8 @@
-"""CrewTUI Config Loader — Centralized project configuration.
+"""Starling Config Loader — Centralized project configuration.
 
 All modules import from here instead of having their own file-path logic.
-Searches for project_config.json in: $CREWUI_CONFIG, ./project_config.json,
-~/.config/crewui/project_config.json.
+Searches for project_config.json in: $STARLING_CONFIG, ./project_config.json,
+~/.config/starling/project_config.json.
 """
 
 import json
@@ -11,9 +11,10 @@ from typing import Optional
 
 # Search order for project config
 _SEARCH_PATHS = [
-    os.environ.get("CREWUI_CONFIG", ""),
+    os.environ.get("STARLING_CONFIG", os.environ.get("CREWUI_CONFIG", "")),
     os.path.join(os.path.dirname(__file__), "project_config.json"),
-    os.path.expanduser("~/.config/crewui/project_config.json"),
+    os.path.expanduser("~/.config/starling/project_config.json"),
+    os.path.expanduser("~/.config/crewui/project_config.json"),  # backwards compat
 ]
 
 _cached_config: Optional[dict] = None
@@ -78,7 +79,7 @@ def _empty_config() -> dict:
 
 def get_project_name() -> str:
     config = load_project_config()
-    return config.get("project", {}).get("name", "CrewTUI")
+    return config.get("project", {}).get("name", "Starling")
 
 
 def get_project_description() -> str:

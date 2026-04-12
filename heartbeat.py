@@ -1,16 +1,19 @@
-"""CrewTUI Heartbeat — Persistent task queue with auto-execution loop.
+"""Starling Heartbeat — Persistent task queue with auto-execution loop.
 
 The always-on engine: checks for pending tasks, assigns to agents, kicks off
 execution, sleeps, repeats. Tasks persist to disk so nothing is lost on restart.
 """
 
 import json
+import logging
 import os
 import re
 import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional, Callable
+
+logger = logging.getLogger("starling.heartbeat")
 
 DEFAULT_INTERVAL = 60  # seconds between heartbeat checks
 
@@ -279,21 +282,41 @@ def _get_default_agent() -> str:
         return ""
 
 
-def auto_route(description: str) -> str:
-    """Pick the best agent for a task based on keywords from config."""
-    keywords = _load_routing_keywords()
-    if not keywords:
-        return _get_default_agent()
+def auto_route(description: str) -> tuple:
+    """Pick the best agent for a task. Priority: keywords > semantic > default.
 
-    desc_lower = description.lower()
-    scores = {}
-    for agent_id, kw_list in keywords.items():
-        score = sum(1 for kw in kw_list if kw in desc_lower)
-        if score > 0:
-            scores[agent_id] = score
-    if scores:
-        return max(scores, key=scores.get)
-    return _get_default_agent()
+    Returns:
+        (agent_id, route_method) where route_method is one of:
+        "keyword", "semantic", or "default".
+    """
+    # 1. Try keyword matching (existing logic, unchanged)
+    keywords = _load_routing_keywords()
+    if keywords:
+        desc_lower = description.lower()
+        scores = {}
+        for agent_id, kw_list in keywords.items():
+            score = sum(1 for kw in kw_list if kw in desc_lower)
+            if score > 0:
+                scores[agent_id] = score
+        if scores:
+            return max(scores, key=scores.get), "keyword"
+
+    # 2. Try semantic routing
+    try:
+        from semantic_router import semantic_route
+        result = semantic_route(description)
+        if result:
+            return result, "semantic"
+    except Exception:
+        pass
+
+    # 3. Fall back to default — log warning so user knows
+    default = _get_default_agent()
+    logger.warning(
+        f"No semantic or keyword match for task '{description[:80]}', "
+        f"falling back to default agent '{default}'"
+    )
+    return default, "default"
 
 
 # === Heartbeat Config (auto-start, interval persistence) ===
@@ -348,6 +371,12 @@ class Heartbeat:
         self._running = True
         self._stop_event.clear()
         self.started_at = datetime.now().isoformat()
+        # Ensure semantic routing vectors are up to date
+        try:
+            from semantic_router import ensure_skill_vectors
+            ensure_skill_vectors()
+        except Exception as e:
+            logger.warning(f"Semantic routing unavailable: {e}")
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -384,8 +413,32 @@ class Heartbeat:
 
         # Route if no agent assigned (skip for crew tasks)
         if not task.get("crew") and not task["agent"]:
-            task["agent"] = auto_route(task["description"])
-            update_task(task["id"], agent=task["agent"])
+            agent_id, route_method = auto_route(task["description"])
+            task["agent"] = agent_id
+            # Tag with routing method for visibility in Queue/History
+            tags = task.get("tags", [])
+            tags.append(f"routed:{route_method}")
+            update_task(task["id"], agent=agent_id, tags=tags)
+            # Cap retries for default-routed tasks (unfit agent, don't waste tokens)
+            if route_method == "default":
+                update_task(task["id"], max_retries=0)
+
+        # Check for duplicate work before executing
+        try:
+            from semantic_router import check_duplicate
+            dup = check_duplicate(task["description"])
+            if dup:
+                logger.warning(
+                    f"Duplicate detected: task '{task['description'][:60]}' matches "
+                    f"completed task {dup['task_id']} (distance={dup['distance']:.4f}). "
+                    f"Tagging as duplicate."
+                )
+                tags = task.get("tags", [])
+                tags.append("duplicate")
+                tags.append(f"dup_of:{dup['task_id']}")
+                update_task(task["id"], tags=tags)
+        except Exception:
+            pass
 
         # Mark running
         update_task(task["id"], status="running", started=datetime.now().isoformat())
@@ -417,8 +470,33 @@ class Heartbeat:
             )
             self.tasks_processed += 1
 
+            # Measure how well the output addressed the goal
+            try:
+                from semantic_router import measure_progress
+                progress = measure_progress(task["description"], result_str)
+                update_task(task["id"], progress=progress)
+                if progress["score"] < 30:
+                    logger.warning(
+                        f"Low progress score ({progress['score']}%) for task "
+                        f"'{task['description'][:60]}' — output may not address the goal"
+                    )
+            except Exception:
+                pass
+
+            # Record for duplicate detection
+            try:
+                from semantic_router import record_completed_task
+                record_completed_task(
+                    task_id=task["id"],
+                    description=task["description"],
+                    agent_id=task.get("agent", ""),
+                    completed=datetime.now().isoformat(),
+                )
+            except Exception:
+                pass
+
             if self.on_task_done:
-                self.on_task_done(task, result)
+                self.on_task_done(task, result_str)
 
             # Re-queue if recurring
             requeue_recurring(task)

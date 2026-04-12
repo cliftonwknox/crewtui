@@ -1,4 +1,4 @@
-"""CrewTUI — Config-driven CrewAI multi-agent system.
+"""Starling — Config-driven CrewAI multi-agent system.
 
 Agents, tasks, and crew composition are loaded from project_config.json.
 Tools are sourced from three tiers: built-in, crewai ecosystem, and custom skills.
@@ -12,7 +12,7 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import ScrapeWebsiteTool
 from ddgs import DDGS
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 # xAI models don't support 'stop' parameter - drop it globally
 litellm.drop_params = True
@@ -191,17 +191,17 @@ class LazyCrewAITool(BaseTool):
     """Proxy that defers crewai_tools instantiation until first use."""
     name: str = "Loading..."
     description: str = "Tool loading on first use"
-    _tool_class_name: str = ""
-    _inner: object = None
+    _tool_class_name: str = PrivateAttr(default="")
+    _inner: object = PrivateAttr(default=None)
 
     def __init__(self, class_name: str, **kwargs):
         catalog_desc = CREWAI_TOOLS_CATALOG.get(class_name, "CrewAI tool")
         super().__init__(
             name=class_name,
             description=catalog_desc,
-            _tool_class_name=class_name,
             **kwargs,
         )
+        self._tool_class_name = class_name
 
     def _get_inner(self):
         if self._inner is None:
@@ -397,7 +397,7 @@ def build_agents_from_config(project_config: dict, presets: dict) -> dict:
         aid = agent_cfg["id"]
         preset_name = agent_cfg.get("preset")
         if not preset_name:
-            raise ValueError(f"Agent '{aid}' has no model preset configured. Run 'crewtui models' to set one up.")
+            raise ValueError(f"Agent '{aid}' has no model preset configured. Run 'starling models' to set one up.")
 
         try:
             llm = build_llm_from_preset(preset_name, presets)
@@ -464,6 +464,20 @@ def _out(filename: str) -> str:
     return filename
 
 
+def _get_memory_context(agent_id: str, query: str = None) -> str:
+    """Retrieve agent memory context for injection into task descriptions.
+
+    When query is provided, uses Crew Memory vector search for relevance-based
+    retrieval instead of just recency.
+    """
+    try:
+        import agent_memory as mem
+        ctx = mem.get_agent_context(agent_id, query=query)
+        return f"\n\nAgent memory context:\n{ctx}" if ctx else ""
+    except Exception:
+        return ""
+
+
 def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> list:
     """Generate a standard task pipeline for an ad-hoc mission."""
     agent_ids = list(agents.keys())
@@ -476,8 +490,9 @@ def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> lis
         research_tasks = []
         for aid in agent_ids[2:]:
             cfg = next((a for a in agents_cfg if a["id"] == aid), {})
+            mem_ctx = _get_memory_context(aid, query=mission)
             t = Task(
-                description=f"Research the following from your perspective as {cfg.get('role', aid)}:\n\n{mission}\n\nProvide detailed findings.",
+                description=f"Research the following from your perspective as {cfg.get('role', aid)}:\n\n{mission}\n\nProvide detailed findings.{mem_ctx}",
                 expected_output="A detailed report in markdown.",
                 agent=agents[aid],
             )
@@ -486,8 +501,9 @@ def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> lis
 
         # Compile (second agent)
         compile_agent_id = agent_ids[1]
+        compile_mem = _get_memory_context(compile_agent_id, query=mission)
         compile_task = Task(
-            description="Compile all research into a single executive report with summary, findings, recommendations, and next steps.",
+            description=f"Compile all research into a single executive report with summary, findings, recommendations, and next steps.{compile_mem}",
             expected_output="A comprehensive report in markdown.",
             agent=agents[compile_agent_id],
             output_file=_out(f"report_{ts}.md"),
@@ -496,8 +512,9 @@ def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> lis
         tasks.append(compile_task)
 
         # Review (first agent)
+        review_mem = _get_memory_context(agent_ids[0], query=mission)
         review_task = Task(
-            description="Review the report. Evaluate recommendations, identify gaps, and provide your final decision.",
+            description=f"Review the report. Evaluate recommendations, identify gaps, and provide your final decision.{review_mem}",
             expected_output="Review with final decision and next steps.",
             agent=agents[agent_ids[0]],
             context=[compile_task],
@@ -506,14 +523,16 @@ def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> lis
         tasks.append(review_task)
     elif len(agent_ids) == 2:
         # Two agents: research + review
+        t1_mem = _get_memory_context(agent_ids[1], query=mission)
         t1 = Task(
-            description=f"Research thoroughly:\n\n{mission}\n\nProvide detailed findings.",
+            description=f"Research thoroughly:\n\n{mission}\n\nProvide detailed findings.{t1_mem}",
             expected_output="A detailed report in markdown.",
             agent=agents[agent_ids[1]],
             output_file=_out(f"report_{ts}.md"),
         )
+        t2_mem = _get_memory_context(agent_ids[0], query=mission)
         t2 = Task(
-            description="Review the findings and provide your final decision with next steps.",
+            description=f"Review the findings and provide your final decision with next steps.{t2_mem}",
             expected_output="Review with decision.",
             agent=agents[agent_ids[0]],
             context=[t1],
@@ -522,8 +541,9 @@ def _generate_mission_tasks(mission: str, agents: dict, agents_cfg: list) -> lis
         tasks = [t1, t2]
     else:
         # Single agent: just do it
+        solo_mem = _get_memory_context(agent_ids[0], query=mission)
         t = Task(
-            description=f"Complete the following task:\n\n{mission}\n\nProvide a thorough response.",
+            description=f"Complete the following task:\n\n{mission}\n\nProvide a thorough response.{solo_mem}",
             expected_output="A detailed response in markdown.",
             agent=agents[agent_ids[0]],
             output_file=_out(f"result_{ts}.md"),
@@ -544,14 +564,16 @@ def _build_default_tasks(project_config: dict, agents: dict) -> list:
     task_list = []
 
     for tc in task_configs:
-        agent = agents.get(tc.get("agent_id"))
+        agent_id = tc.get("agent_id")
+        agent = agents.get(agent_id)
         if not agent:
             continue
 
         context = [tasks_by_id[cid] for cid in tc.get("context_task_ids", []) if cid in tasks_by_id]
+        mem_ctx = _get_memory_context(agent_id, query=tc["description"]) if agent_id else ""
 
         task = Task(
-            description=tc["description"],
+            description=f"{tc['description']}{mem_ctx}",
             expected_output=tc.get("expected_output", "A detailed response."),
             agent=agent,
             output_file=tc.get("output_file"),
@@ -568,7 +590,7 @@ if __name__ == "__main__":
     from model_wizard import load_presets
 
     if not config_exists():
-        print("No project_config.json found. Run 'crewtui setup' first.")
+        print("No project_config.json found. Run 'starling setup' first.")
         raise SystemExit(1)
 
     from dotenv import load_dotenv

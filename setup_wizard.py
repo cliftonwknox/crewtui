@@ -1,4 +1,4 @@
-"""CrewTUI Setup Wizard — Interactive first-run configuration."""
+"""Starling Setup Wizard — Interactive first-run configuration."""
 
 import os
 import json
@@ -67,15 +67,15 @@ def _banner(title):
 
 def run_setup():
     """Main setup wizard entry point."""
-    _banner("CrewTUI Setup Wizard")
-    print("  This wizard will configure your CrewTUI project.\n")
+    _banner("Starling Setup Wizard")
+    print("  This wizard will configure your Starling project.\n")
 
     # Step 1: Project info
     project_name = _prompt("Project name", "My Crew")
     project_desc = _prompt("Project description", "AI-powered multi-agent system")
 
     # Step 2: Working directory
-    default_dir = os.path.expanduser(f"~/crewtui-projects/{project_name.lower().replace(' ', '-')}")
+    default_dir = os.path.expanduser(f"~/starling-projects/{project_name.lower().replace(' ', '-')}")
     print(f"\n  Working directory: where output, memory, and data files go.")
     work_dir = _prompt("Working directory", default_dir)
     work_dir = os.path.expanduser(work_dir)
@@ -155,7 +155,7 @@ def run_setup():
     print(f"  Agents:  {len(agents)}")
     print(f"  Work dir: {work_dir}")
     project_dir = os.path.dirname(os.path.abspath(__file__))
-    print(f"\n  To launch:  cd {project_dir} && uv run crewtui\n")
+    print(f"\n  To launch:  cd {project_dir} && uv run starling\n")
 
 
 SKILL_PACKS = {
@@ -402,6 +402,53 @@ def _check_preset_key(preset_name: str, presets: dict):
 
 def _setup_agent(index: int, preset_keys: list, presets: dict, available_tools: dict, used_ids: set) -> dict:
     """Configure a single agent with review/edit step."""
+    # Offer templates
+    try:
+        from semantic_router import AGENT_TEMPLATES, list_templates
+        templates = list_templates()
+        print(f"\n  Agent templates (or press Enter to build from scratch):")
+        for i, (tid, tname) in enumerate(templates, 1):
+            tmpl = AGENT_TEMPLATES[tid]
+            print(f"    {i}) {tname:20s} — {tmpl['primary_purpose'][:60]}")
+        tmpl_choice = input(f"  Template [1-{len(templates)}, or Enter to skip]: ").strip()
+        if tmpl_choice.isdigit() and 1 <= int(tmpl_choice) <= len(templates):
+            tid, tname = templates[int(tmpl_choice) - 1]
+            tmpl = AGENT_TEMPLATES[tid]
+            print(f"  Loading template: {tname}")
+            print(f"  (You can edit any field below)")
+            # Pre-fill and jump to the edit flow
+            agent = {
+                "id": tid if tid not in used_ids else f"{tid}{index + 1}",
+                "name": tmpl["name"],
+                "role": tmpl["role"],
+                "goal": tmpl["goal"],
+                "backstory": tmpl["backstory"],
+                "tools": list(tmpl["tools"]),
+                "preset": preset_keys[0] if preset_keys else "",
+                "color": tmpl.get("color", "white"),
+                "allow_delegation": False,
+                "template": tid,
+            }
+            # Let user pick a model preset
+            print(f"\n  Available model presets:")
+            for i, key in enumerate(preset_keys, 1):
+                p = presets[key]
+                print(f"    {i}) {key:18s} {p['label']} via {p['provider']}")
+            while True:
+                choice = _prompt("Model preset", preset_keys[0] if preset_keys else "")
+                if choice in presets:
+                    break
+                if choice.isdigit():
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(preset_keys):
+                        choice = preset_keys[idx]
+                        break
+                print(f"  Enter a number or preset name.")
+            agent["preset"] = choice
+            return agent
+    except Exception:
+        pass  # templates unavailable, proceed manually
+
     # ID
     while True:
         default_id = f"agent{index + 1}" if index > 0 else "leader"
@@ -718,14 +765,14 @@ def _detect_terminal() -> str:
 def _generate_desktop_shortcut(project_name: str):
     """Generate a .desktop file for the app menu."""
     desktop_dir = os.path.expanduser("~/.local/share/applications")
-    icon_path = os.path.expanduser("~/.local/share/icons/crewtui.svg")
+    icon_path = os.path.expanduser("~/.local/share/icons/starling.svg")
     safe_name = project_name.lower().replace(" ", "-")
-    desktop_path = os.path.join(desktop_dir, f"crewtui-{safe_name}.desktop")
+    desktop_path = os.path.join(desktop_dir, f"starling-{safe_name}.desktop")
 
     project_dir = os.path.dirname(__file__)
 
     # Install bundled icon if not already present
-    bundled_icon = os.path.join(project_dir, "crewtui.svg")
+    bundled_icon = os.path.join(project_dir, "starling.svg")
     if os.path.exists(bundled_icon) and not os.path.exists(icon_path):
         os.makedirs(os.path.dirname(icon_path), exist_ok=True)
         import shutil
@@ -734,19 +781,19 @@ def _generate_desktop_shortcut(project_name: str):
     # Detect terminal emulator
     terminal = _detect_terminal()
     if terminal:
-        exec_line = f'{terminal} -e "cd {project_dir} && uv run crewtui"'
+        exec_line = f'{terminal} -e "cd {project_dir} && uv run starling"'
     else:
-        exec_line = f'cd {project_dir} && uv run crewtui'
+        exec_line = f'cd {project_dir} && uv run starling'
 
     content = f"""[Desktop Entry]
-Name={project_name} (CrewTUI)
+Name={project_name} (Starling)
 Comment=Launch {project_name} Agent Command Center
 Exec={exec_line}
 Icon={icon_path if os.path.exists(icon_path) else 'utilities-terminal'}
 Terminal={'true' if not terminal else 'false'}
 Type=Application
 Categories=Development;Utility;
-Keywords=crewai;crewtui;agents;
+Keywords=crewai;starling;agents;
 """
     os.makedirs(desktop_dir, exist_ok=True)
     with open(desktop_path, "w") as f:

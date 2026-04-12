@@ -1,4 +1,4 @@
-"""CrewTUI CLI — Entry point dispatcher."""
+"""Starling CLI — Entry point dispatcher."""
 
 import os
 import sys
@@ -14,11 +14,11 @@ def main():
         from setup_wizard import run_setup
         run_setup()
     elif cmd == "models":
-        sys.argv = ["crewtui-models"] + args[1:]
+        sys.argv = ["starling-models"] + args[1:]
         from model_wizard import main as model_main
         model_main()
     elif cmd == "telegram":
-        sys.argv = ["crewtui-telegram"] + args[1:]
+        sys.argv = ["starling-telegram"] + args[1:]
         from telegram_notify import main as tg_main
         tg_main()
     elif cmd == "daemon":
@@ -31,11 +31,11 @@ def main():
         elif sub == "status":
             status()
         else:
-            print("Usage: crewtui daemon <on|off|status>")
+            print("Usage: starling daemon <on|off|status>")
     elif cmd in ("-h", "--help", "help"):
         print_help()
     elif cmd in ("-v", "--version", "version"):
-        print("CrewTUI 1.0.0")
+        print("Starling 1.0.0")
     else:
         print(f"Unknown command: {cmd}")
         print_help()
@@ -43,7 +43,7 @@ def main():
 
 
 def _kill_stale_tui_processes():
-    """Kill any orphaned CrewTUI processes (not attached to a terminal)."""
+    """Kill any orphaned Starling processes (not attached to a terminal)."""
     import subprocess
     my_pid = os.getpid()
     try:
@@ -59,8 +59,8 @@ def _kill_stale_tui_processes():
             args = " ".join(parts[2:])
             if pid == my_pid or pid == os.getppid():
                 continue
-            # Kill detached crewtui processes (tty=? means no terminal)
-            if tty == "?" and ("crewtui" in args or "tui.py" in args) and "daemon.py" not in args:
+            # Kill detached starling processes (tty=? means no terminal)
+            if tty == "?" and ("starling" in args or "tui.py" in args) and "daemon.py" not in args:
                 os.kill(pid, 9)
     except Exception:
         pass
@@ -70,25 +70,25 @@ def launch_tui():
     from config_loader import config_exists
     if not config_exists():
         print("No project_config.json found.")
-        print("Run 'crewtui setup' to create your project.")
+        print("Run 'starling setup' to create your project.")
         sys.exit(1)
     _kill_stale_tui_processes()
     while True:
-        from tui import CrewTUIApp
-        app = CrewTUIApp()
+        from tui import StarlingApp
+        app = StarlingApp()
         result = app.run()
         if app.return_code == 42:
             # Restart requested — exec a fresh process so all code reloads
-            print("Restarting CrewTUI...")
+            print("Restarting Starling...")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         break
 
 
 def print_help():
     print("""
-CrewTUI — Config-driven CrewAI Terminal UI
+Starling — Config-driven CrewAI Terminal UI
 
-Usage: crewtui <command>
+Usage: starling <command>
 
 Commands:
   tui              Launch the TUI (default)

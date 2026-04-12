@@ -1,4 +1,4 @@
-"""CrewTUI Telegram Notifications — Send crew results to Telegram."""
+"""Starling Telegram Notifications — Send crew results to Telegram."""
 
 import os
 import json
@@ -23,6 +23,18 @@ DEFAULT_CONFIG = {
 
 def _config_file() -> str:
     """Find telegram_config.json — prefer work dir, fall back to source dir."""
+    try:
+        from config_loader import get_data_file
+        work_path = get_data_file("telegram_config.json")
+        if os.path.exists(work_path):
+            return work_path
+    except Exception:
+        pass
+    # Fall back to source dir
+    source_path = os.path.join(CONFIG_DIR, "telegram_config.json")
+    if os.path.exists(source_path):
+        return source_path
+    # Return work dir path for writing new configs
     try:
         from config_loader import get_data_file
         return get_data_file("telegram_config.json")
@@ -118,7 +130,7 @@ def send_document(file_path: str, caption: str = "") -> bool:
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
 
     # Build multipart form data
-    boundary = "----CrewTUIBoundary"
+    boundary = "----StarlingBoundary"
     filename = os.path.basename(file_path)
 
     with open(file_path, "rb") as f:
@@ -156,9 +168,9 @@ def send_document(file_path: str, caption: str = "") -> bool:
 def _get_brand():
     try:
         from config_loader import get_project_name
-        return get_project_name() or "CrewTUI"
+        return get_project_name() or "Starling"
     except Exception:
-        return "CrewTUI"
+        return "Starling"
 
 
 def notify_crew_complete(mission: str, duration: int, output_files: list = None):
@@ -233,7 +245,7 @@ def cmd_show():
     """Show current Telegram config."""
     config = load_config()
     print("\n╔══════════════════════════════════════════════════════════════╗")
-    print("║              CrewTUI — Telegram Config                   ║")
+    print("║              Starling — Telegram Config                   ║")
     print("╚══════════════════════════════════════════════════════════════╝\n")
     enabled = "✓ Enabled" if config.get("enabled") else "✗ Disabled"
     print(f"  Status:    {enabled}")
@@ -340,7 +352,7 @@ def cmd_remove():
 def main():
     import sys
     if len(sys.argv) < 2:
-        print("\nCrewTUI Telegram Notifications")
+        print("\nStarling Telegram Notifications")
         print("  Usage: python telegram_notify.py <command>")
         print()
         print("  Commands:")

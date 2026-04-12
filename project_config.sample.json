@@ -2,7 +2,7 @@
   "project": {
     "name": "My Project",
     "description": "Describe your project here",
-    "work_dir": "~/crewtui-projects/my-project"
+    "work_dir": "~/starling-projects/my-project"
   },
   "agents": [
     {

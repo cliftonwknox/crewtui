@@ -1,4 +1,4 @@
-"""CrewTUI Model Manager — Add, remove, and list model presets."""
+"""Starling Model Manager — Add, remove, and list model presets."""
 
 import json
 import os
@@ -306,7 +306,7 @@ def cmd_list():
     env = load_env()
 
     print("\n╔══════════════════════════════════════════════════════════════╗")
-    print("║              CrewTUI — Model Presets                     ║")
+    print("║              Starling — Model Presets                     ║")
     print("╚══════════════════════════════════════════════════════════════╝\n")
 
     for key in sorted(presets.keys()):
@@ -535,14 +535,16 @@ def cmd_test():
             api_key = "lm-studio"
 
         extra = p.get("extra", {})
-        response = litellm.completion(
-            model=p["model"],
-            messages=[{"role": "user", "content": "Say hello in one sentence."}],
-            api_base=p["base_url"],
-            api_key=api_key,
-            max_tokens=100,
+        call_kwargs = {
+            "model": p["model"],
+            "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+            "api_key": api_key,
+            "max_tokens": 100,
             **extra,
-        )
+        }
+        if p.get("base_url"):
+            call_kwargs["api_base"] = p["base_url"]
+        response = litellm.completion(**call_kwargs)
         text = response.choices[0].message.content
         print(f"  ✓ Response: {text[:200]}")
     except Exception as e:
@@ -551,7 +553,7 @@ def cmd_test():
 
 def main():
     if len(sys.argv) < 2:
-        print("\nCrewTUI Model Manager")
+        print("\nStarling Model Manager")
         print("  Usage: python model_wizard.py <command>")
         print()
         print("  Commands:")

@@ -1,9 +1,9 @@
-"""CrewTUI Daemon — Headless heartbeat + Telegram listener.
+"""Starling Daemon — Headless heartbeat + Telegram listener.
 
 Runs without the TUI so tasks process even when the terminal is closed.
-Start: crewtui daemon on
-Stop:  crewtui daemon off
-Check: crewtui daemon status
+Start: starling daemon on
+Stop:  starling daemon off
+Check: starling daemon status
 """
 
 import os
@@ -21,23 +21,23 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("crewtui.daemon")
+logger = logging.getLogger("starling.daemon")
 
 
 def _pid_file():
     try:
         from config_loader import get_data_file
-        return get_data_file("crewtui_daemon.pid")
+        return get_data_file("starling_daemon.pid")
     except Exception:
-        return os.path.join(BASE_DIR, "crewtui_daemon.pid")
+        return os.path.join(BASE_DIR, "starling_daemon.pid")
 
 
 def _log_file():
     try:
         from config_loader import get_data_file
-        return get_data_file("crewtui_daemon.log")
+        return get_data_file("starling_daemon.log")
     except Exception:
-        return os.path.join(BASE_DIR, "crewtui_daemon.log")
+        return os.path.join(BASE_DIR, "starling_daemon.log")
 
 
 def is_running() -> bool:
@@ -64,7 +64,7 @@ def start():
 
     from config_loader import config_exists
     if not config_exists():
-        print("No project_config.json found. Run 'crewtui setup' first.")
+        print("No project_config.json found. Run 'starling setup' first.")
         return
 
     import subprocess
@@ -204,10 +204,39 @@ def _run_daemon():
 
     config = load_project_config()
     presets = load_presets()
-    project_name = config.get("project", {}).get("name", "CrewTUI")
+    project_name = config.get("project", {}).get("name", "Starling")
 
     logger.info(f"Project: {project_name}")
     logger.info(f"Agents: {[a['id'] for a in config.get('agents', [])]}")
+
+    # Validate Crew Memory
+    try:
+        import crew_memory
+        cm_status = crew_memory.startup_check()
+        if cm_status["ok"]:
+            logger.info("Crew Memory online")
+            # Auto-index existing memories if vector DB is empty
+            stats = crew_memory.get_stats()
+            if stats["total_vectors"] == 0:
+                count = crew_memory.index_existing_memories()
+                if count:
+                    logger.info(f"Auto-indexed {count} existing memories into vector store")
+        else:
+            for msg in cm_status["messages"]:
+                logger.warning(msg)
+    except Exception as e:
+        logger.error(f"Crew Memory unavailable: {e}")
+
+    # Ensure semantic routing vectors are up to date
+    try:
+        from semantic_router import ensure_skill_vectors
+        rebuilt = ensure_skill_vectors()
+        if rebuilt:
+            logger.info("Embedded skill vectors for semantic routing")
+        else:
+            logger.info("Semantic routing vectors up to date")
+    except Exception as e:
+        logger.warning(f"Semantic routing unavailable: {e}")
 
     # Build components for task execution
     components = None
@@ -234,7 +263,7 @@ def _run_daemon():
         out_dir = get_output_dir()
         os.makedirs(out_dir, exist_ok=True)
 
-        memory_context = mem.get_agent_context(agent_id)
+        memory_context = mem.get_agent_context(agent_id, query=task['description'])
         memory_section = f"\nAgent memory context:\n{memory_context}" if memory_context else ""
 
         # List recent reports for context
@@ -321,7 +350,7 @@ def _run_daemon():
             pass
 
     def on_tick():
-        """Check for due cron jobs on each heartbeat cycle."""
+        """Check for due cron jobs and Crew Memory health on each heartbeat cycle."""
         try:
             import cron_engine
             due_jobs = cron_engine.check_due_jobs()
@@ -346,6 +375,36 @@ def _run_daemon():
                     pass
         except Exception as e:
             logger.error(f"Cron check error: {e}")
+
+        # Periodic Crew Memory health check + auto-recovery
+        try:
+            import crew_memory as _cm
+            health = _cm.get_health()
+            if not health["ok"]:
+                result = _cm.health_check()
+                if result["ok"]:
+                    logger.info("Crew Memory recovered")
+                    try:
+                        import telegram_notify as tg
+                        tg.send_message(f"*{project_name}* — Crew Memory recovered after {health['consecutive_failures']} failures")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Daily compact — run once per day at the first tick after midnight
+        try:
+            import crew_memory as _cm2
+            now = __import__('datetime').datetime.now()
+            last_compact = getattr(on_tick, '_last_compact_date', None)
+            if last_compact != now.date():
+                on_tick._last_compact_date = now.date()
+                result = _cm2.compact()
+                total = result["purged"] + result["trimmed"]["global"] + sum(result["trimmed"]["agents"].values())
+                if total:
+                    logger.info(f"Daily compact: cleaned {total} entries")
+        except Exception:
+            pass
 
     # Start heartbeat
     heartbeat = hb.Heartbeat(
@@ -400,12 +459,12 @@ def _run_daemon():
 
 def main():
     if len(sys.argv) < 2:
-        print("CrewTUI Daemon")
-        print("  Usage: crewtui daemon <on|off|status>")
+        print("Starling Daemon")
+        print("  Usage: starling daemon <on|off|status>")
         return
 
     cmd = sys.argv[1].lower() if len(sys.argv) > 1 else ""
-    # Handle "crewtui daemon on" where sys.argv = ['crewtui', 'daemon', 'on']
+    # Handle "starling daemon on" where sys.argv = ['starling', 'daemon', 'on']
     if cmd == "daemon" and len(sys.argv) > 2:
         cmd = sys.argv[2].lower()
 

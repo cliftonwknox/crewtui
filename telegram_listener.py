@@ -1,4 +1,4 @@
-"""CrewTUI Telegram Listener — Receive commands from Telegram and execute them.
+"""Starling Telegram Listener — Receive commands from Telegram and execute them.
 
 Polls for incoming messages via getUpdates API. Supports:
   /crew <mission>   — queue a full crew run
@@ -18,7 +18,7 @@ import urllib.request
 import urllib.parse
 import logging
 
-logger = logging.getLogger("crewtui.telegram")
+logger = logging.getLogger("starling.telegram")
 
 POLL_INTERVAL = 5  # seconds between polls
 
@@ -141,7 +141,7 @@ class TelegramListener:
 
 
 def create_command_handler(app=None):
-    """Create a command handler function that integrates with CrewTUI.
+    """Create a command handler function that integrates with Starling.
 
     Can work standalone (without TUI app) or integrated.
     """
@@ -167,6 +167,10 @@ def create_command_handler(app=None):
                 return _cmd_reject(args)
             elif command == "runcron":
                 return _cmd_runcron(args)
+            elif command == "memory":
+                return _cmd_memory(args)
+            elif command == "routing":
+                return _cmd_routing()
             elif command == "help" or command == "start":
                 return _cmd_help()
             else:
@@ -237,6 +241,24 @@ def _cmd_status(app=None) -> str:
             lines.append("\n*Heartbeat:* inactive")
     except Exception:
         lines.append("\n*Heartbeat:* unknown")
+
+    # Crew Memory status
+    try:
+        import crew_memory
+        h = crew_memory.get_health()
+        stats = crew_memory.get_stats()
+        if h["ok"]:
+            lines.append(
+                f"\n*Crew Memory:* online | "
+                f"{stats['total_vectors']} vectors | "
+                f"{stats['global_memories']} global"
+            )
+        elif h["degraded"]:
+            lines.append(f"\n*Crew Memory:* DEGRADED | {h['consecutive_failures']} failures")
+        else:
+            lines.append(f"\n*Crew Memory:* recovering")
+    except Exception:
+        lines.append("\n*Crew Memory:* unavailable")
 
     return "\n".join(lines)
 
@@ -363,10 +385,68 @@ def _cmd_runcron(args: str) -> str:
     return f"Cron triggered: {job['name']}\nQueued for immediate execution."
 
 
+def _cmd_memory(args: str) -> str:
+    """Search Crew Memory from Telegram."""
+    if not args:
+        # No query — show stats
+        try:
+            import crew_memory
+            stats = crew_memory.get_stats()
+            h = crew_memory.get_health()
+            status = "online" if h["ok"] else ("DEGRADED" if h["degraded"] else "recovering")
+            return (
+                f"*Crew Memory: {status}*\n\n"
+                f"Total vectors: {stats['total_vectors']}\n"
+                f"Agent memories: {stats['agent_memories']}\n"
+                f"Global (shared): {stats['global_memories']}\n\n"
+                f"_Search: /memory <query>_"
+            )
+        except Exception as e:
+            return f"Crew Memory unavailable: {e}"
+
+    # Search by query
+    try:
+        import crew_memory
+        results = crew_memory.recall_hybrid(args, limit=8)
+        if not results:
+            return f"No memories matching: {args}"
+
+        lines = [f"*Memory search: {args}*\n"]
+        for r in results:
+            tier = r.get("memory_tier", "?")
+            agent = r.get("agent_id", "?")
+            ts = r.get("timestamp", "")[:10]
+            content = r["content"][:120]
+            if tier == "global":
+                lines.append(f"[global via {agent}] {content}")
+            else:
+                lines.append(f"[{agent}/{tier}] {content}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Memory search failed: {e}"
+
+
+def _cmd_routing() -> str:
+    """Show semantic routing status."""
+    try:
+        from semantic_router import get_routing_info
+        info = get_routing_info()
+        mode_emoji = {"semantic": "ON", "keywords_only": "keywords only", "unavailable": "OFF"}
+        return (
+            "*Routing Status*\n\n"
+            f"Mode: {mode_emoji.get(info['mode'], info['mode'])}\n"
+            f"Agents: {info['agent_count']}\n"
+            f"Model: {info['embedding_model'] or 'n/a'}\n"
+            f"Last embed: {info['last_embed_time'] or 'never'}"
+        )
+    except Exception as e:
+        return f"Routing unavailable: {e}"
+
+
 def _cmd_help() -> str:
     """Show help text."""
     return (
-        "*CrewTUI Telegram Commands*\n\n"
+        "*Starling Telegram Commands*\n\n"
         "/crew <mission> — Queue a full crew run\n"
         "/task <desc> — Queue a single-agent task\n"
         "/task @agent <desc> — Queue task for specific agent\n"
@@ -375,6 +455,9 @@ def _cmd_help() -> str:
         "/queue — Show task queue\n"
         "/agents — List configured agents\n"
         "/crons — List scheduled cron jobs\n"
+        "/memory — Crew Memory stats\n"
+        "/memory <query> — Search agent memories\n"
+        "/routing — Semantic routing status\n"
         "/approve <id> — Approve a pending cron job\n"
         "/reject <id> — Reject a pending cron job\n"
         "/help — This message\n\n"

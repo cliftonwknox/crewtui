@@ -1,4 +1,4 @@
-"""CrewTUI — Config-driven CrewAI Terminal UI"""
+"""Starling — Config-driven CrewAI Terminal UI"""
 
 import math
 from textual.app import App, ComposeResult
@@ -34,16 +34,16 @@ MODEL_PRESETS = _load_model_presets()
 _log_path = None
 try:
     from config_loader import get_data_file
-    _log_path = get_data_file("crewtui.log")
+    _log_path = get_data_file("starling.log")
 except Exception:
-    _log_path = os.path.join(os.path.dirname(__file__), "crewtui.log")
+    _log_path = os.path.join(os.path.dirname(__file__), "starling.log")
 logging.basicConfig(
     filename=_log_path,
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("crewtui")
+logger = logging.getLogger("starling")
 
 
 def _output_dir():
@@ -86,6 +86,9 @@ HELP_TEXT = """[bold]Commands:[/]
   [cyan]/memory[/] promote       — Show promotion candidates
   [cyan]/memory[/] decay         — Mark old entries as stale
   [cyan]/memory[/] wipe          — Delete current agent's memory
+  [cyan]/routing[/] status       — Show routing mode and status
+  [cyan]/routing[/] rebuild      — Re-embed agent skill vectors
+  [cyan]/routing[/] test <desc>  — Test which agent handles a task
   [cyan]/remember[/] <text>      — Save to long-term memory
   [cyan]/forget[/] <keyword>     — Remove matching memories
   [cyan]/queue[/] add <task>     — Add task (single-agent chat)
@@ -271,7 +274,7 @@ class AgentPanel(Vertical):
 
 # === Main App ===
 
-class CrewTUIApp(App):
+class StarlingApp(App):
     CSS = """
     Screen { layout: vertical; }
     #main-area { height: 1fr; }
@@ -492,10 +495,10 @@ class CrewTUIApp(App):
 
         # Dynamic title
         if self._project_config:
-            name = self._project_config.get("project", {}).get("name", "CrewTUI")
+            name = self._project_config.get("project", {}).get("name", "Starling")
             self.TITLE = f"{name} — Agent Command Center"
         else:
-            self.TITLE = "CrewTUI — Setup Required"
+            self.TITLE = "Starling — Setup Required"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -503,7 +506,7 @@ class CrewTUIApp(App):
         if not self._project_config or not self._agents_cfg:
             yield Static(
                 "[bold red]No project configured.[/]\n\n"
-                "Run [bold cyan]crewtui setup[/] to create your project.\n\n"
+                "Run [bold cyan]starling setup[/] to create your project.\n\n"
                 "This will guide you through:\n"
                 "  - Naming your project\n"
                 "  - Creating agents with roles and backstories\n"
@@ -584,7 +587,18 @@ class CrewTUIApp(App):
                         yield Horizontal(
                             Static("[bold cyan]Agent[/]  "),
                             Button("New Agent", id="agent-new-btn", variant="primary"),
+                            Button("From Template", id="agent-template-btn", variant="default"),
                             id="agent-new-bar",
+                        )
+                        try:
+                            from semantic_router import list_templates
+                            _tmpl_options = [(name, tid) for tid, name in list_templates()]
+                        except Exception:
+                            _tmpl_options = []
+                        yield Select(
+                            _tmpl_options,
+                            prompt="Pick a template...",
+                            id="agent-template-select",
                         )
                         yield Static("Agent ID")
                         yield Input(placeholder="e.g., researcher, writer (no spaces)", id="agent-id-input")
@@ -596,10 +610,30 @@ class CrewTUIApp(App):
                         yield Input(placeholder="e.g., Find and analyze information", id="agent-goal-input")
                         yield Static("Backstory")
                         yield Input(placeholder="e.g., Detail-oriented with 10 years experience", id="agent-backstory-input")
-                        yield Static("Model Preset")
+                        yield Static("Available Models")
+                        _all_presets = _load_model_presets()
+                        def _preset_available(k, v):
+                            key_env = v.get("api_key_env")
+                            if key_env:
+                                return bool(os.environ.get(key_env))
+                            # Local models: check if server is reachable
+                            base_url = v.get("base_url", "")
+                            if "127.0.0.1" in base_url or "localhost" in base_url:
+                                import urllib.request
+                                try:
+                                    urllib.request.urlopen(base_url.rstrip("/") + "/models", timeout=1)
+                                    return True
+                                except Exception:
+                                    return False
+                            return True
+                        _active_presets = [
+                            (f"{k} — {v['label']}", k)
+                            for k, v in _all_presets.items()
+                            if _preset_available(k, v)
+                        ]
                         yield Select(
-                            [(f"{k} — {v['label']}", k) for k, v in _load_model_presets().items()],
-                            prompt="Select model preset...",
+                            _active_presets,
+                            prompt="Select model...",
                             id="agent-preset-select",
                         )
                         yield Static("Tools [dim](comma-separated)[/]")
@@ -705,6 +739,30 @@ class CrewTUIApp(App):
         self._load_cron_view()
         self._load_models_list()
         self._load_docs_section("overview")
+
+        # Validate Crew Memory (vector memory system)
+        try:
+            import crew_memory
+            cm_status = crew_memory.startup_check()
+            if cm_status["ok"]:
+                self.notify("Crew Memory online")
+                # Auto-index existing memories if vector DB is empty
+                stats = crew_memory.get_stats()
+                if stats["total_vectors"] == 0:
+                    def _auto_index():
+                        try:
+                            count = crew_memory.index_existing_memories()
+                            if count:
+                                logger.info(f"Auto-indexed {count} existing memories into vector store")
+                        except Exception:
+                            pass
+                    threading.Thread(target=_auto_index, daemon=True).start()
+            else:
+                for msg in cm_status["messages"]:
+                    self.notify(msg, severity="warning")
+        except Exception as e:
+            logger.error(f"Crew Memory import failed: {e}")
+            self.notify("Crew Memory unavailable — using keyword memory only", severity="warning")
 
         # Start daemon if not already running — it handles heartbeat + telegram
         from daemon import is_running as daemon_is_running, start as daemon_start
@@ -877,6 +935,32 @@ class CrewTUIApp(App):
             pass
         log.write(f"  [bold cyan]Telegram:[/]   Notify: {tg_status}  |  Listener: {tg_listener}")
 
+        # Crew Memory
+        try:
+            import crew_memory
+            cm_health = crew_memory.get_health()
+            if cm_health["ok"]:
+                cm_stats = crew_memory.get_stats()
+                log.write(
+                    f"  [bold cyan]Crew Memory:[/] [green]ONLINE[/]  |  "
+                    f"Vectors: {cm_stats['total_vectors']}  |  "
+                    f"Global: {cm_stats['global_memories']}  |  "
+                    f"Agent: {cm_stats['agent_memories']}"
+                )
+            elif cm_health["degraded"]:
+                log.write(
+                    f"  [bold cyan]Crew Memory:[/] [bold red]DEGRADED[/]  |  "
+                    f"Failures: {cm_health['consecutive_failures']}  |  "
+                    f"Last: {cm_health['last_error'] or 'unknown'}"
+                )
+            else:
+                log.write(
+                    f"  [bold cyan]Crew Memory:[/] [yellow]RECOVERING[/]  |  "
+                    f"Failures: {cm_health['consecutive_failures']}"
+                )
+        except Exception:
+            log.write(f"  [bold cyan]Crew Memory:[/] [dim]UNAVAILABLE[/]")
+
         # Show active heartbeat tasks
         try:
             import heartbeat as hb
@@ -990,6 +1074,16 @@ class CrewTUIApp(App):
                 log.write(f"           [red]Error: {t['error'][:80]}[/]")
             if t.get("result") and t["status"] == "done":
                 log.write(f"           [green]Result: {t['result'][:80]}[/]")
+            if t.get("progress") and t["status"] == "done":
+                p = t["progress"]
+                score = p.get("score", 0)
+                assess = p.get("assessment", "")
+                pcolor = "green" if score >= 70 else "yellow" if score >= 50 else "red"
+                log.write(f"           [{pcolor}]Progress: {score}% ({assess})[/]")
+            tags = t.get("tags", [])
+            if "duplicate" in tags:
+                dup_of = next((tg[7:] for tg in tags if tg.startswith("dup_of:")), "?")
+                log.write(f"           [yellow]Duplicate of #{dup_of[-6:]}[/]")
 
     def _load_models_list(self):
         """Populate the models and agents lists."""
@@ -1121,6 +1215,9 @@ class CrewTUIApp(App):
                 except Exception:
                     pass
 
+        elif event.select.id == "agent-template-select" and event.value != Select.NULL:
+            self._apply_agent_template(str(event.value))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle form buttons."""
         if event.button.id == "model-test-btn":
@@ -1137,6 +1234,36 @@ class CrewTUIApp(App):
             self._delete_agent()
         elif event.button.id == "agent-new-btn":
             self._clear_agent_form()
+
+        elif event.button.id == "agent-template-btn":
+            # Populate and show template selector
+            from semantic_router import list_templates
+            templates = list_templates()
+            select = self.query_one("#agent-template-select", Select)
+            select.set_options([(name, tid) for tid, name in templates])
+
+    def _apply_agent_template(self, template_id: str):
+        """Pre-fill the agent form from a template."""
+        from semantic_router import get_template
+        tmpl = get_template(template_id)
+        if not tmpl:
+            return
+        try:
+            self.query_one("#agent-id-input", Input).value = template_id
+            self.query_one("#agent-name-input", Input).value = tmpl["name"]
+            self.query_one("#agent-role-input", Input).value = tmpl["role"]
+            self.query_one("#agent-goal-input", Input).value = tmpl["goal"]
+            self.query_one("#agent-backstory-input", Input).value = tmpl["backstory"]
+            self.query_one("#agent-tools-input", Input).value = ", ".join(tmpl["tools"])
+            # Set color
+            color_select = self.query_one("#agent-color-select", Select)
+            color_select.value = tmpl.get("color", "cyan")
+            # Store template ID so it's saved with the agent config
+            self._pending_template_id = template_id
+            log = self.query_one("#model-result-log", RichLog)
+            log.write(f"[green]Template '{tmpl['name']}' loaded. Edit fields and click Save Agent.[/]")
+        except Exception as e:
+            self.notify(f"Template error: {e}", severity="error")
 
     def _get_model_form(self) -> dict:
         """Read current values from the model form."""
@@ -1409,6 +1536,11 @@ class CrewTUIApp(App):
             "color": color,
             "allow_delegation": False,
         }
+        # Attach template ID if agent was created from a template
+        template_id = getattr(self, "_pending_template_id", None)
+        if template_id:
+            agent_cfg["template"] = template_id
+            self._pending_template_id = None
 
         # Save to project config
         from config_loader import load_project_config, save_project_config
@@ -1688,7 +1820,7 @@ class CrewTUIApp(App):
         if not agent:
             raise ValueError(f"Unknown agent: {agent_id}")
 
-        memory_context = mem.get_agent_context(agent_id)
+        memory_context = mem.get_agent_context(agent_id, query=task['description'])
         memory_section = f"\nAgent memory context:\n{memory_context}" if memory_context else ""
 
         self.post_message(AgentOutput(agent_id, f"[bold yellow]Heartbeat task:[/] {task['description']}"))
@@ -1792,7 +1924,7 @@ class CrewTUIApp(App):
         try:
             import telegram_notify as tg
             from config_loader import get_project_name
-            brand = get_project_name() or "CrewTUI"
+            brand = get_project_name() or "Starling"
             tg.send_message(
                 f"*{brand} Heartbeat Task Complete*\n\n"
                 f"*Task:* {task['description'][:100]}\n"
@@ -2351,7 +2483,7 @@ class CrewTUIApp(App):
                 self.post_message(ChatResponse(agent_id, "[bold red]Error:[/] No LLM configured for this agent. Check API keys."))
                 return
 
-            memory_context = mem.get_agent_context(agent_id)
+            memory_context = mem.get_agent_context(agent_id, query=message)
             memory_section = f"\n\n## Your Memory\n{memory_context}" if memory_context else ""
 
             system_prompt = (
@@ -2486,21 +2618,16 @@ class CrewTUIApp(App):
 
         elif cmd == "/memory":
             import agent_memory as mem
-            sub = parts[1] if len(parts) > 1 else "show"
+            sub = parts[1] if len(parts) > 1 else ""
             agent_id = self.current_agent
             panel = self.query_one(f"#panel-{agent_id}", AgentPanel)
             agent_cfg = next((a for a in self._agents_cfg if a["id"] == agent_id), None)
             agent_name = agent_cfg["name"] if agent_cfg else agent_id
 
-            if sub == "show":
-                context = mem.get_agent_context(agent_id)
-                if context:
-                    panel.write(f"[bold]Memory for {agent_name}:[/]")
-                    panel.write(context)
-                else:
-                    panel.write("[dim]No memories stored yet.[/]")
-            elif sub == "stats":
+            if sub == "stats":
                 panel.write("[bold]Memory Stats:[/]")
+                panel.write("")
+                panel.write("[bold]Agent Memory (JSON):[/]")
                 for a in self._agents_cfg:
                     stats = mem.get_stats(a["id"])
                     panel.write(
@@ -2508,10 +2635,60 @@ class CrewTUIApp(App):
                         f"{stats['episodic_active']} episodic active, "
                         f"{stats['episodic_stale']} stale"
                     )
-            elif sub == "decay":
-                for aid in self._agent_ids:
-                    mem.decay_episodic(aid)
-                panel.write("[green]Decayed stale episodic entries for all agents.[/]")
+                try:
+                    import crew_memory
+                    cm_stats = crew_memory.get_stats()
+                    panel.write("")
+                    panel.write("[bold]Crew Memory (Vector):[/]")
+                    panel.write(f"  Total vectors: {cm_stats['total_vectors']}")
+                    panel.write(f"  Agent memories: {cm_stats['agent_memories']}")
+                    panel.write(f"  Global (shared): {cm_stats['global_memories']}")
+                    panel.write(f"  DB path: [dim]{cm_stats['db_path']}[/]")
+                except Exception:
+                    panel.write("\n[dim]Crew Memory unavailable[/]")
+            elif sub == "health":
+                try:
+                    import crew_memory
+                    h = crew_memory.get_health()
+                    panel.write("[bold]Crew Memory Health:[/]")
+                    status_color = "green" if h["ok"] else ("red" if h["degraded"] else "yellow")
+                    status_text = "ONLINE" if h["ok"] else ("DEGRADED" if h["degraded"] else "RECOVERING")
+                    panel.write(f"  Status: [{status_color}]{status_text}[/]")
+                    panel.write(f"  Embedder: {'[green]OK[/]' if h['embedder_ok'] else '[red]FAILED[/]'}")
+                    panel.write(f"  Database: {'[green]OK[/]' if h['db_ok'] else '[red]FAILED[/]'}")
+                    panel.write(f"  Consecutive failures: {h['consecutive_failures']}")
+                    panel.write(f"  Total failures: {h['total_failures']}")
+                    if h['last_error']:
+                        panel.write(f"  Last error: [red]{h['last_error']}[/]")
+                        panel.write(f"  Error time: {h['last_error_time']}")
+                    if h['last_success_time']:
+                        panel.write(f"  Last success: {h['last_success_time']}")
+                except Exception as e:
+                    panel.write(f"[red]Crew Memory not available: {e}[/]")
+            elif sub == "global":
+                try:
+                    import crew_memory
+                    query = " ".join(parts[2:]) if len(parts) > 2 else None
+                    if query:
+                        results = crew_memory.recall(query, memory_tier="global", limit=10)
+                    else:
+                        results = crew_memory.recall("recent decisions findings contacts", memory_tier="global", limit=15)
+                    if results:
+                        panel.write(f"[bold]Shared Team Knowledge{'  (search: ' + query + ')' if query else ''}:[/]")
+                        for r in results:
+                            tags = r.get("tags", "")
+                            source_agent = ""
+                            for tag in tags.split(","):
+                                if tag.startswith("from:"):
+                                    source_agent = tag[5:]
+                                    break
+                            origin = f"[dim]via {source_agent}[/]" if source_agent else ""
+                            ts = r.get("timestamp", "")[:10]
+                            panel.write(f"  [{r.get('entry_type', '?')}] {origin} [{ts}] {r['content'][:100]}")
+                    else:
+                        panel.write("[dim]No global memories yet.[/]")
+                except Exception as e:
+                    panel.write(f"[red]Crew Memory not available: {e}[/]")
             elif sub == "wipe":
                 from config_loader import get_memory_dir
                 agent_dir = os.path.join(get_memory_dir(), agent_id)
@@ -2521,23 +2698,106 @@ class CrewTUIApp(App):
                     panel.write(f"[bold red]Wiped all memory for {agent_name}.[/]")
                 else:
                     panel.write("[dim]No memory to wipe.[/]")
-            elif sub == "promote":
-                candidates = mem.promote_candidates(agent_id)
-                if candidates:
-                    panel.write("[bold]Promotion candidates:[/]")
-                    for c in candidates:
-                        panel.write(f"  [{c.get('type', '?')}] {c['content'][:80]}")
-                else:
-                    panel.write("[dim]No promotion candidates.[/]")
+            elif not sub:
+                panel.write("[bold]Usage:[/]  /memory <query>  or:")
+                panel.write("  /memory stats  — Memory counts (JSON + vector)")
+                panel.write("  /memory health — Crew Memory system health")
+                panel.write("  /memory global — Shared team knowledge")
+                panel.write("  /memory wipe   — Delete all memory for current agent")
             else:
-                results = mem.search_memory(agent_id, sub)
-                if results:
-                    panel.write(f"[bold]Search '{sub}':[/]")
-                    for r in results:
-                        src = r.get("_source", "?")
-                        panel.write(f"  [{src}] [{r.get('type', '?')}] {r['content'][:80]}")
-                else:
-                    panel.write(f"[dim]No memories matching '{sub}'.[/]")
+                # Hybrid search: vector + keyword, merged
+                query = " ".join(parts[1:])
+                try:
+                    import crew_memory
+                    formatted = crew_memory.recall_formatted(query, agent_id=agent_id, limit=8)
+                    if formatted:
+                        panel.write(f"[bold]Memory search '{query}':[/]")
+                        panel.write(formatted)
+                    else:
+                        # Fall back to keyword-only if vector returns nothing
+                        results = mem.search_memory(agent_id, query, limit=10)
+                        if results:
+                            panel.write(f"[bold]Memory search '{query}':[/]")
+                            for r in results:
+                                src = r.get("_source", "?")
+                                panel.write(f"  [{src}] [{r.get('type', '?')}] {r['content'][:80]}")
+                        else:
+                            panel.write(f"[dim]No memories matching '{query}'.[/]")
+                except Exception:
+                    # Crew Memory unavailable — keyword only
+                    results = mem.search_memory(agent_id, query, limit=10)
+                    if results:
+                        panel.write(f"[bold]Memory search '{query}':[/]")
+                        for r in results:
+                            src = r.get("_source", "?")
+                            panel.write(f"  [{src}] [{r.get('type', '?')}] {r['content'][:80]}")
+                    else:
+                        panel.write(f"[dim]No memories matching '{query}'.[/]")
+
+        elif cmd == "/routing":
+            sub = parts[1] if len(parts) > 1 else "status"
+            panel = self.query_one(f"#panel-{self.current_agent}", AgentPanel)
+            if sub == "status":
+                try:
+                    from semantic_router import get_routing_info
+                    info = get_routing_info()
+                    mode_color = "green" if info["mode"] == "semantic" else "yellow"
+                    panel.write("[bold]Routing Status:[/]")
+                    panel.write(f"  Mode: [{mode_color}]{info['mode']}[/]")
+                    panel.write(f"  Agents: {info['agent_count']}")
+                    panel.write(f"  Model: {info['embedding_model'] or 'n/a'}")
+                    panel.write(f"  Last embed: {info['last_embed_time'] or 'never'}")
+                    panel.write(f"  Cache: {info['cache_size']}/{info['cache_max']}")
+                    try:
+                        from semantic_router import get_dedup_stats
+                        ds = get_dedup_stats()
+                        panel.write(f"  Dedup tracking: {ds['tracked_tasks']}/{ds['max_entries']} tasks")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    panel.write(f"[red]Routing unavailable: {e}[/]")
+            elif sub == "rebuild":
+                try:
+                    from semantic_router import rebuild
+                    result = rebuild()
+                    if result:
+                        from semantic_router import get_routing_info
+                        info = get_routing_info()
+                        panel.write(f"[green]Re-embedded skill vectors for {info['agent_count']} agents.[/]")
+                    else:
+                        panel.write("[dim]No agents to embed.[/]")
+                except Exception as e:
+                    panel.write(f"[red]Rebuild failed: {e}[/]")
+            elif sub == "test":
+                desc = " ".join(parts[2:]) if len(parts) > 2 else ""
+                if not desc:
+                    panel.write("[bold]Usage:[/]  /routing test <task description>")
+                    return
+                try:
+                    from semantic_router import semantic_route, _get_table, _embed_text
+                    from heartbeat import auto_route
+                    # Show full cascade result
+                    agent_id, method = auto_route(desc)
+                    panel.write(f"[bold]Routing test:[/] \"{desc}\"")
+                    panel.write(f"  Winner: [cyan]{agent_id}[/] via [bold]{method}[/]")
+                    # Show all agents ranked by semantic distance
+                    query_vector = _embed_text(desc)
+                    table = _get_table()
+                    if table.count_rows() > 0:
+                        results = table.search(query_vector).metric("cosine").limit(10).to_list()
+                        panel.write("  [bold]Semantic scores:[/]")
+                        for r in results:
+                            dist = r.get("_distance", 0)
+                            # Green: strong match; Yellow: still accepted (<= routing threshold 0.65); Red: rejected
+                            bar = "[green]" if dist <= 0.45 else "[yellow]" if dist <= 0.65 else "[red]"
+                            panel.write(f"    {r['agent_id']:20s} {bar}{dist:.4f}[/]")
+                except Exception as e:
+                    panel.write(f"[red]Routing test failed: {e}[/]")
+            else:
+                panel.write("[bold]Usage:[/]")
+                panel.write("  /routing status  — Show routing mode and status")
+                panel.write("  /routing rebuild — Re-embed all agent skill vectors")
+                panel.write("  /routing test <description> — Test which agent would handle a task")
 
         elif cmd == "/remember":
             import agent_memory as mem
@@ -3032,7 +3292,7 @@ class CrewTUIApp(App):
                     panel.write(f"  {key}: {s}")
             elif sub == "test":
                 from config_loader import get_project_name
-                brand = get_project_name() or "CrewTUI"
+                brand = get_project_name() or "Starling"
                 ok = tg.send_message(f"*{brand} Test*\n\nTelegram notifications working!")
                 panel.write("[green]Test sent![/]" if ok else "[red]Test failed. Check config.[/]")
             elif sub == "on":
@@ -3212,5 +3472,5 @@ class CrewTUIApp(App):
 
 
 if __name__ == "__main__":
-    app = CrewTUIApp()
+    app = StarlingApp()
     app.run()

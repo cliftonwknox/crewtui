@@ -13,11 +13,15 @@ wheels/
 .env
 telegram_config.json
 
+# Internal dev artifacts
+tasks/
+SPEC-*.md
+
 # Runtime data
 home/
 cron_config.json
-crewtui_daemon.pid
-crewtui_daemon.log
+starling_daemon.pid
+starling_daemon.log
 project_config.json
 heartbeat_config.json
 task_queue.json

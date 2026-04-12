@@ -1,4 +1,4 @@
-"""CrewTUI Agent Memory — Layered, contextual, human-like memory for crew agents.
+"""Starling Agent Memory — Layered, contextual, human-like memory for crew agents.
 
 Inspired by the elite-human-memory skill. Each agent has:
 - Episodic memory: daily entries with full context (auto-decays)
@@ -98,6 +98,23 @@ def add_episodic(agent_id: str, content: str, source: str = "crew_run",
     if len(entries) > EPISODIC_MAX_ENTRIES:
         entries = entries[-EPISODIC_MAX_ENTRIES:]
     _save_json(_episodic_path(agent_id), entries)
+    # Also index in vector store (Crew Memory)
+    try:
+        import crew_memory
+        crew_memory.remember(
+            agent_id=agent_id, content=content, memory_tier="episodic",
+            entry_type=entry_type, source=source, tags=tags,
+            confidence=confidence, entry_id=entry.get("id", ""),
+        )
+        # Auto-promote high-value entries to the global cross-agent pool
+        if entry_type in crew_memory._GLOBAL_PROMOTE_TYPES:
+            crew_memory.remember_global(
+                content=content, source_agent_id=agent_id,
+                entry_type=entry_type, source=source, tags=tags,
+                confidence=confidence, entry_id=entry.get("id", ""),
+            )
+    except Exception:
+        pass
     return entry
 
 
@@ -113,16 +130,12 @@ def get_episodic(agent_id: str, limit: int = 20, tags: Optional[list] = None,
     now = datetime.now().isoformat()
     result = entries[-limit:]
     if result:
-        # Update access counts on the returned entries
-        accessed_ids = set()
-        for e in result:
-            e["access_count"] = e.get("access_count", 0) + 1
-            e["last_accessed"] = now
-            accessed_ids.add(id(e))
-        # Save the full list (entries may be filtered, so reload and update)
+        # Collect IDs of returned entries
+        accessed_ids = {e.get("id") for e in result if e.get("id")}
+        # Reload full list and update access counts by ID (not content)
         all_entries = _load_json(_episodic_path(agent_id))
         for e in all_entries:
-            if e.get("content") in {r.get("content") for r in result}:
+            if e.get("id") in accessed_ids:
                 e["access_count"] = e.get("access_count", 0) + 1
                 e["last_accessed"] = now
         _save_json(_episodic_path(agent_id), all_entries)
@@ -136,11 +149,16 @@ def add_semantic(agent_id: str, content: str, entry_type: str = "finding",
                  tags: Optional[list] = None, supersedes: Optional[str] = None):
     """Add or promote a memory to semantic (long-term) storage."""
     entries = _load_json(_semantic_path(agent_id))
-    # If superseding, mark old entry
+    # If superseding, mark old entry and clean up its vector
     if supersedes:
         for e in entries:
             if supersedes.lower() in e.get("content", "").lower():
                 e["state"] = "superseded"
+        try:
+            import crew_memory
+            crew_memory.delete_by_content(agent_id, supersedes)
+        except Exception:
+            pass
     entry = create_entry(content, "promotion", entry_type, confidence, scope, tags=tags)
     entries.append(entry)
     if len(entries) > SEMANTIC_MAX_ENTRIES:
@@ -149,6 +167,23 @@ def add_semantic(agent_id: str, content: str, entry_type: str = "finding",
         inactive = [e for e in entries if e["state"] != "active"]
         entries = inactive[-(SEMANTIC_MAX_ENTRIES // 5):] + active[-SEMANTIC_MAX_ENTRIES:]
     _save_json(_semantic_path(agent_id), entries)
+    # Also index in vector store (Crew Memory)
+    try:
+        import crew_memory
+        crew_memory.remember(
+            agent_id=agent_id, content=content, memory_tier="semantic",
+            entry_type=entry_type, source="promotion", tags=tags,
+            confidence=confidence, scope=scope, entry_id=entry.get("id", ""),
+        )
+        # Semantic memories of high-value types always go to global pool
+        if entry_type in crew_memory._GLOBAL_PROMOTE_TYPES:
+            crew_memory.remember_global(
+                content=content, source_agent_id=agent_id,
+                entry_type=entry_type, source="promotion", tags=tags,
+                confidence=confidence, entry_id=entry.get("id", ""),
+            )
+    except Exception:
+        pass
     return entry
 
 
@@ -179,16 +214,27 @@ def search_memory(agent_id: str, query: str, limit: int = 10) -> list:
 # === Maintenance ===
 
 def decay_episodic(agent_id: str):
-    """Mark old episodic entries as stale."""
+    """Mark old episodic entries as stale and clean up their vectors."""
     entries = _load_json(_episodic_path(agent_id))
     cutoff = (datetime.now() - timedelta(days=EPISODIC_STALE_DAYS)).isoformat()
     changed = False
+    stale_ids = []
     for e in entries:
         if e.get("state") == "active" and e.get("when", "") < cutoff:
             e["state"] = "stale"
             changed = True
+            eid = e.get("id", "")
+            if eid:
+                stale_ids.append(eid)
     if changed:
         _save_json(_episodic_path(agent_id), entries)
+        # Remove stale vectors
+        try:
+            import crew_memory
+            for eid in stale_ids:
+                crew_memory.delete_by_entry_id(eid)
+        except Exception:
+            pass
 
 
 def promote_candidates(agent_id: str) -> list:
@@ -215,9 +261,24 @@ def promote_candidates(agent_id: str) -> list:
     return unique
 
 
-def get_agent_context(agent_id: str, max_entries: int = 15) -> str:
+def get_agent_context(agent_id: str, max_entries: int = 15, query: str = None) -> str:
     """Build a context string for injecting into an agent's system prompt.
-    Returns recent episodic + all active semantic as formatted text."""
+
+    If query is provided, uses Crew Memory vector search to find the most
+    relevant memories instead of just returning the most recent ones.
+    Falls back to recency-based retrieval if vector search is unavailable.
+    """
+    # Try relevance-based retrieval first when a query is provided
+    if query:
+        try:
+            import crew_memory
+            relevant = crew_memory.recall_formatted(query, agent_id=agent_id, limit=max_entries)
+            if relevant:
+                return relevant
+        except Exception:
+            pass
+
+    # Fallback: recency-based retrieval (original behavior)
     lines = []
     semantic = get_semantic(agent_id, limit=max_entries)
     if semantic:

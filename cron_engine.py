@@ -1,9 +1,10 @@
-"""CrewTUI Cron Engine — Scheduled job management.
+"""Starling Cron Engine — Scheduled job management.
 
 Stores cron jobs in cron_config.json in the project work dir.
 The daemon checks for due jobs on each heartbeat tick.
 """
 
+import calendar
 import os
 import json
 import re
@@ -11,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import logging
-logger = logging.getLogger("crewtui.cron")
+logger = logging.getLogger("starling.cron")
 
 WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -114,14 +115,18 @@ def compute_next_run(parsed: dict, after: datetime = None) -> datetime:
         return target
 
     if parsed["type"] == "monthly":
-        target = now.replace(day=parsed["day"], hour=parsed["hour"],
+        # Clamp day to the last valid day of the month (e.g. day=31 in Feb -> 28/29)
+        day = min(parsed["day"], calendar.monthrange(now.year, now.month)[1])
+        target = now.replace(day=day, hour=parsed["hour"],
                              minute=parsed["minute"], second=0, microsecond=0)
         if target <= now:
             # Next month
             if now.month == 12:
-                target = target.replace(year=now.year + 1, month=1)
+                next_year, next_month = now.year + 1, 1
             else:
-                target = target.replace(month=now.month + 1)
+                next_year, next_month = now.year, now.month + 1
+            day = min(parsed["day"], calendar.monthrange(next_year, next_month)[1])
+            target = target.replace(year=next_year, month=next_month, day=day)
         return target
 
     raise ValueError(f"Unknown schedule type: {parsed['type']}")
