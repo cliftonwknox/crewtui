@@ -89,6 +89,7 @@ HELP_TEXT = """[bold]Commands:[/]
   [cyan]/routing[/] status       — Show routing mode and status
   [cyan]/routing[/] rebuild      — Re-embed agent skill vectors
   [cyan]/routing[/] test <desc>  — Test which agent handles a task
+  [cyan]/setup[/]                — Relaunch the setup wizard (stops daemon and restarts)
   [cyan]/remember[/] <text>      — Save to long-term memory
   [cyan]/forget[/] <keyword>     — Remove matching memories
   [cyan]/queue[/] add <task>     — Add task (single-agent chat)
@@ -2741,6 +2742,50 @@ class StarlingApp(App):
                             panel.write(f"  [{src}] [{r.get('type', '?')}] {r['content'][:80]}")
                     else:
                         panel.write(f"[dim]No memories matching '{query}'.[/]")
+
+        elif cmd == "/setup":
+            # Suspend the TUI, run the setup wizard, then restart on return.
+            # suspend() needs to succeed BEFORE we touch background services,
+            # so a failure there doesn't leave the TUI running with everything
+            # turned off.
+            panel = self.query_one(f"#panel-{self.current_agent}", AgentPanel)
+            panel.write("[cyan]Launching setup wizard — TUI will restart after you finish.[/]")
+
+            try:
+                with self.suspend():
+                    # Once suspended, stop background services so they don't
+                    # race with the wizard's stdin or overwrite its output
+                    if self.crew_running:
+                        self.crew_running = False
+                    if self._heartbeat and self._heartbeat.running:
+                        self._heartbeat.stop()
+                    if self._telegram_listener and self._telegram_listener.running:
+                        self._telegram_listener.stop()
+                    try:
+                        from daemon import is_running as daemon_is_running, stop as daemon_stop
+                        if daemon_is_running():
+                            daemon_stop()
+                    except Exception:
+                        pass
+
+                    try:
+                        from setup_wizard import run_setup
+                        run_setup()
+                    except Exception as e:
+                        print(f"\nSetup wizard failed: {e}")
+                        try:
+                            input("Press Enter to return to the TUI...")
+                        except (EOFError, KeyboardInterrupt):
+                            pass
+            except Exception as e:
+                panel.write(f"[red]Could not suspend TUI: {e}[/]")
+                return
+            # If we get here, the wizard returned (user quit or cancelled before
+            # launching Starling). Restart so config changes are picked up.
+            # Note: on a successful launch, the wizard called os.execv and this
+            # process was replaced — we never reach this line in that path.
+            self.exit(return_code=42)
+            return
 
         elif cmd == "/routing":
             sub = parts[1] if len(parts) > 1 else "status"

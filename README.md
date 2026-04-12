@@ -45,8 +45,10 @@ naming your agents, picking AI models, and configuring tools.
 - Semantic task routing: automatic agent selection by meaning, not keywords
 - 6 pre-built agent templates (Researcher, Content Writer, Data Analyst, etc.)
 - Agent tier system: Specialist / Coordinator / Leader with cumulative permissions
-- Three-path setup wizard: Quick start (1 min, 1 agent), Team setup, or Advanced
+- Three-path setup wizard: Quick start (1 min, 1 agent), Team setup (multi-agent with Leader), or Advanced
 - Full forward/back/skip/quit navigation in setup
+- Import existing config from a `.starling` backup file (validated, secret-stripped)
+- Relaunchable via `/setup` from inside the TUI at any time
 - Duplicate work detection and progress tracking
 - Task queue with heartbeat processing
 - Agent memory (episodic + semantic) with global cross-agent knowledge sharing

@@ -16,6 +16,7 @@ import os
 import json
 import sys
 import readline  # enables line editing, history, and arrow keys in input()
+from typing import Optional
 
 import theme
 
@@ -220,7 +221,7 @@ def run_setup():
     while True:
         print("  How would you like to start?\n")
         print(f"    {theme.color('1', 'highlight')}) New project")
-        print(f"    {theme.color('2', 'highlight')}) Import existing config {theme.color('(not yet implemented)', 'muted')}")
+        print(f"    {theme.color('2', 'highlight')}) Import existing config (.starling backup)")
         print(f"    {theme.color('3', 'highlight')}) Quit")
         try:
             choice = input(theme.color("\n  Choice [1]: ", "highlight")).strip() or "1"
@@ -230,8 +231,9 @@ def run_setup():
         if choice == "1":
             break
         elif choice == "2":
-            theme.warn("Import is not yet implemented. Coming in a future release.")
-            continue
+            if _run_import_flow():
+                return  # import completed
+            continue  # import cancelled — re-show menu
         elif choice == "3":
             print()
             return
@@ -648,17 +650,644 @@ def _finalize_quick_start(state: dict):
 
 
 def _run_team_setup():
-    """Team Setup path — currently delegates to the full wizard.
+    """Team Setup path — streamlined multi-agent flow with Leader designation.
 
-    In a future release this will get its own streamlined multi-agent flow.
-    For now, the existing full wizard handles multiple agents well enough.
+    Steps:
+        1. Project name
+        2. How many agents? (2-10)
+        3. For each agent: template → model (abbreviated, no per-agent review)
+        4. Leader designation: pick which agent is the Leader/CEO
+        5. Confirm + launch
     """
-    theme.muted("Team Setup uses the Advanced wizard for now. Future releases will have a dedicated flow.\n")
+    state = {"agents": []}  # accumulates agent dicts
+    steps = ["project_name", "agent_count", "agents", "leader", "confirm"]
+    step_idx = 0
+
+    def total_steps() -> int:
+        return 5
+
+    while 0 <= step_idx < len(steps):
+        current = steps[step_idx]
+        theme.clear_screen()
+        theme.step_header(step_idx + 1, total_steps(), _team_step_title(current))
+
+        result = _dispatch_team_step(current, state)
+
+        if result is _DONE:
+            return
+        if result is _QUIT:
+            theme.muted("Exiting setup.")
+            return
+        if result is _BACK:
+            if step_idx == 0:
+                theme.muted("You're at the first step. Press 'q' to quit or enter a name to continue.")
+                continue
+            _pop_team_step_state(steps[step_idx], state)
+            step_idx -= 1
+            continue
+        step_idx += 1
+
+    _finalize_team_setup(state)
+
+
+def _team_step_title(step_name: str) -> str:
+    titles = {
+        "project_name": "Name your project",
+        "agent_count":  "How many agents?",
+        "agents":       "Build your team",
+        "leader":       "Pick your Leader",
+        "confirm":      "Review and launch",
+    }
+    return titles.get(step_name, step_name)
+
+
+def _pop_team_step_state(step_name: str, state: dict):
+    """Remove team-setup state associated with a given step."""
+    keys_per_step = {
+        "project_name": ["project_name", "project_desc", "work_dir"],
+        "agent_count":  ["agent_count"],
+        "agents":       ["agents", "_pending_keys", "_available_presets"],
+        "leader":       ["leader_agent_id", "leader_auto_picked"],
+        "confirm":      [],
+    }
+    for k in keys_per_step.get(step_name, [step_name]):
+        if k == "agents":
+            state["agents"] = []  # reset, don't delete
+        else:
+            state.pop(k, None)
+
+
+def _dispatch_team_step(step_name: str, state: dict):
+    if step_name == "project_name":
+        return _step_project_name(state)          # reuse Quick Start step
+    if step_name == "agent_count":
+        return _step_agent_count(state)
+    if step_name == "agents":
+        return _step_agents_loop(state)
+    if step_name == "leader":
+        return _step_pick_leader(state)
+    if step_name == "confirm":
+        return _step_team_confirm(state)
+    raise ValueError(f"Unknown team step: {step_name}")
+
+
+def _step_agent_count(state: dict):
+    """How many agents? 2-10."""
+    print("  A team needs at least 2 agents. You can pick up to 10.\n")
+    print(_nav_hint())
+    default = str(state.get("agent_count") or 3)
+    while True:
+        raw = _prompt_nav("Number of agents", default=default)
+        if raw in (_BACK, _SKIP, _QUIT):
+            return raw
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            theme.error("Enter a number between 2 and 10.")
+            continue
+        if 2 <= n <= MAX_AGENTS:
+            state["agent_count"] = n
+            return n
+        theme.error(f"Pick between 2 and {MAX_AGENTS}.")
+
+
+def _step_agents_loop(state: dict):
+    """Build each agent with abbreviated prompts. Supports back within the loop."""
     try:
-        input(theme.color("  Press Enter to continue...", "muted"))
+        from semantic_router import AGENT_TEMPLATES, list_templates
+    except ImportError:
+        theme.error("Templates unavailable (semantic_router import failed).")
+        theme.info("Switching to Advanced wizard for manual agent creation.")
+        _run_full_wizard()
+        return _DONE
+
+    templates = list_templates()
+    if not templates:
+        theme.warn("No agent templates are registered.")
+        theme.info("Switching to Advanced wizard.")
+        _run_full_wizard()
+        return _DONE
+
+    from model_wizard import load_presets
+    all_presets = load_presets()
+    available = [(k, v) for k, v in all_presets.items() if _preset_available(k, v)]
+    if not available:
+        theme.warn("No model presets have valid API keys or reachable local servers.")
+        print("  Set API keys in your environment, or start LM Studio/Ollama, then re-run setup.")
+        available = list(all_presets.items())
+    state["_available_presets"] = dict(available)
+
+    count = state["agent_count"]
+    agents = state.get("agents") or []
+    state["agents"] = agents
+
+    # Loop with mini-state-machine supporting back inside the agent loop
+    i = len(agents)  # resume from where we left off if state was preserved
+    used_ids = {a["id"] for a in agents}
+
+    while i < count:
+        theme.clear_screen()
+        theme.step_header(3, 5, f"Agent {i + 1} of {count}")
+
+        # Pick template
+        tmpl_options = []
+        for tid, tname in templates:
+            tmpl = AGENT_TEMPLATES[tid]
+            purpose = tmpl.get("primary_purpose", "")[:55]
+            display = f"{theme.color(tname, 'accent', bold=True):30s} — {theme.color(purpose, 'muted')}"
+            tmpl_options.append((display, tid))
+
+        print(f"  Pick a template for agent {i + 1}.\n")
+        print(_nav_hint())
+        tmpl_result = _pick_option("Template", tmpl_options, default_index=0)
+        if tmpl_result is _BACK:
+            if i == 0:
+                # Back out of the whole agents step
+                return _BACK
+            # Remove last agent and loop back one
+            agents.pop()
+            used_ids = {a["id"] for a in agents}
+            i -= 1
+            continue
+        if tmpl_result in (_SKIP, _QUIT):
+            return tmpl_result
+        template_id = tmpl_result
+        tmpl = AGENT_TEMPLATES[template_id]
+
+        # Pick model
+        theme.clear_screen()
+        theme.step_header(3, 5, f"Agent {i + 1} of {count} — model")
+        model_options = []
+        for k, v in available:
+            key_env = v.get("api_key_env")
+            key_status = ""
+            if key_env and os.environ.get(key_env):
+                key_status = theme.color(" [key set]", "success")
+            elif not key_env:
+                key_status = theme.color(" [local]", "accent")
+            display = f"{k:18s} {v.get('label', ''):30s}{key_status}"
+            model_options.append((display, k))
+
+        print(f"  Pick a model for {theme.color(tmpl['name'], 'accent')}.\n")
+        print(_nav_hint())
+        model_result = _pick_option("Model", model_options, default_index=0)
+        if model_result is _BACK:
+            # Re-pick template for this agent
+            continue
+        if model_result in (_SKIP, _QUIT):
+            return model_result
+
+        # Build the agent, ensuring unique ID — use a counter that advances
+        # until an unused ID is found (safe against collisions even if a user
+        # already picked an ID like "researcher_2" earlier in the loop)
+        base_id = template_id
+        if base_id not in used_ids:
+            agent_id = base_id
+            suffix_n = 0
+        else:
+            suffix_n = 2
+            while f"{base_id}_{suffix_n}" in used_ids:
+                suffix_n += 1
+            agent_id = f"{base_id}_{suffix_n}"
+        agent = {
+            "id": agent_id,
+            "name": tmpl["name"] if suffix_n == 0 else f"{tmpl['name']} {suffix_n}",
+            "role": tmpl["role"],
+            "goal": tmpl["goal"],
+            "backstory": tmpl["backstory"],
+            "tools": list(tmpl["tools"]),
+            "preset": model_result,
+            "color": COLORS[i % len(COLORS)],
+            "allow_delegation": False,
+            "template": template_id,
+            "tier": tmpl.get("tier", "specialist"),
+        }
+        agents.append(agent)
+        used_ids.add(agent_id)
+        i += 1
+
+    return "agents_complete"
+
+
+def _step_pick_leader(state: dict):
+    """Step 4: designate which agent is the Leader/CEO of the team."""
+    agents = state.get("agents", [])
+    if not agents:
+        theme.error("No agents to pick a leader from — please restart setup.")
+        return _QUIT
+
+    print("  Every team needs a Leader/CEO — the agent you talk to, who")
+    print("  coordinates the others. Pick one of your agents.\n")
+    print(_nav_hint(skippable=True))
+
+    # Find current default if any
+    default_idx = 0
+    current_leader = state.get("leader_agent_id")
+    for i, a in enumerate(agents):
+        if a["id"] == current_leader:
+            default_idx = i
+            break
+
+    options = []
+    for a in agents:
+        display = f"{theme.color(a['name'], 'accent', bold=True):30s} ({a['template']}, {a['preset']})"
+        options.append((display, a["id"]))
+
+    result = _pick_option("Leader", options, default_index=default_idx, skippable=True)
+    if result is _BACK:
+        return _BACK
+    if result is _QUIT:
+        return _QUIT
+    if result is _SKIP:
+        # Default to first agent — flagged in state so confirm screen can show
+        # that this was auto-picked rather than explicitly chosen
+        state["leader_agent_id"] = agents[0]["id"]
+        state["leader_auto_picked"] = True
+        return _SKIP
+
+    state["leader_agent_id"] = result
+    state["leader_auto_picked"] = False
+    return result
+
+
+def _step_team_confirm(state: dict):
+    """Step 5: summary + launch."""
+    agents = state.get("agents", [])
+    leader_id = state.get("leader_agent_id")
+
+    print(f"  {theme.color('Review your team', 'primary', bold=True)}:\n")
+    print(f"    Project:    {theme.color(state['project_name'], 'accent')}")
+    print(f"    Work dir:   {theme.color(state['work_dir'], 'muted')}")
+    print(f"    Agents:     {len(agents)}\n")
+
+    for a in agents:
+        marker = theme.color(" [LEADER]", "highlight") if a["id"] == leader_id else ""
+        print(f"      • {theme.color(a['name'], 'accent', bold=True):25s} "
+              f"{theme.color(a['template'], 'muted')} on "
+              f"{theme.color(a['preset'], 'accent')}{marker}")
+
+    if state.get("leader_auto_picked"):
+        print()
+        theme.muted("  (Leader auto-picked — first agent in the list.)")
+
+    # Warn about any missing API keys
+    from model_wizard import load_presets
+    presets = state.get("_available_presets") or load_presets()
+    missing_keys = set()
+    for a in agents:
+        preset = presets.get(a["preset"], {})
+        key_env = preset.get("api_key_env")
+        if key_env and not os.environ.get(key_env):
+            missing_keys.add(key_env)
+    if missing_keys:
+        print()
+        theme.warn(f"Missing API keys: {', '.join(sorted(missing_keys))}")
+        print(f"    Set them in your work dir .env file before running tasks.")
+
+    print()
+    print(_nav_hint())
+    try:
+        raw = input(theme.color("  Save and launch Starling? [Y/n/b/q]: ", "highlight")).strip().lower()
     except (EOFError, KeyboardInterrupt):
+        return _QUIT
+    if raw == "b":
+        return _BACK
+    if raw == "q":
+        return _QUIT
+    if raw and raw[0] != "y":
+        theme.muted("Cancelled. Run setup again when you're ready.")
+        return _QUIT
+    return "confirmed"
+
+
+def _finalize_team_setup(state: dict):
+    """Write the config from Team Setup state and launch Starling."""
+    required = ("project_name", "project_desc", "work_dir", "agents", "leader_agent_id")
+    missing = [k for k in required if not state.get(k)]
+    if missing:
+        theme.error(f"Internal error: missing state {missing}. Please re-run setup.")
         return
-    _run_full_wizard()
+
+    agents = state["agents"]
+    leader_id = state["leader_agent_id"]
+    work_dir = state["work_dir"]
+
+    # Promote the Leader agent: tier=leader, allow_delegation=True
+    for a in agents:
+        if a["id"] == leader_id:
+            a["tier"] = "leader"
+            a["allow_delegation"] = True
+            break
+
+    # Create work dir and subdirs
+    os.makedirs(work_dir, exist_ok=True)
+    for sub in ("output", "memory", "skills"):
+        os.makedirs(os.path.join(work_dir, sub), exist_ok=True)
+
+    config = {
+        "project": {
+            "name": state["project_name"],
+            "description": state["project_desc"],
+            "work_dir": work_dir,
+        },
+        "agents": agents,
+        "max_agents": MAX_AGENTS,
+        "default_tasks": [],
+        "routing": {
+            "keywords": {},
+            "default_agent": leader_id,
+        },
+    }
+
+    config_path = os.path.join(os.path.dirname(__file__), "project_config.json")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    theme.clear_screen()
+    theme.banner("Setup Complete!")
+    theme.success(f"Config saved: {config_path}")
+    print(f"  Project: {theme.color(state['project_name'], 'accent')}")
+    print(f"  Team:    {len(agents)} agents, Leader is "
+          f"{theme.color(next(a['name'] for a in agents if a['id'] == leader_id), 'accent', bold=True)}")
+    print(f"  Work dir: {work_dir}\n")
+
+    _launch_starling_or_exit(os.path.dirname(os.path.abspath(__file__)))
+
+
+# === Import flow (.starling backup files) ===
+
+def _run_import_flow() -> bool:
+    """Import a .starling backup file. Returns True if completed, False if cancelled."""
+    theme.clear_screen()
+    theme.banner("Import existing config")
+    print("  Import a .starling backup file to restore a previous setup.")
+    print("  The file contains agent configs, model presets, routing, and skill references.")
+    print("  (Secrets like API keys and Telegram tokens are NOT included and must be re-added.)\n")
+    print(_nav_hint())
+
+    # Suggest a default location
+    default_dir = os.path.expanduser("~/starling-backups")
+    suggested = ""
+    if os.path.isdir(default_dir):
+        candidates = sorted(
+            [f for f in os.listdir(default_dir) if f.endswith(".starling")],
+            reverse=True,
+        )
+        if candidates:
+            suggested = os.path.join(default_dir, candidates[0])
+
+    while True:
+        path_result = _prompt_nav(
+            "Path to .starling file",
+            default=suggested,
+            hint="drag-and-drop or paste a path",
+            required=True,
+        )
+        if path_result in (_BACK, _QUIT):
+            return False
+        path = os.path.expanduser(path_result)
+        if not os.path.exists(path):
+            theme.error(f"File not found: {path}")
+            continue
+
+        # Parse + validate
+        backup, errors = _load_and_validate_backup(path)
+        if errors:
+            theme.error("This backup has problems:")
+            for err in errors:
+                print(f"    • {err}")
+            retry = _prompt_nav("Try a different file?", default="y")
+            if retry in (_BACK, _QUIT):
+                return False
+            if isinstance(retry, str) and retry.lower().startswith("n"):
+                return False
+            continue
+        break
+
+    # Preview
+    theme.clear_screen()
+    theme.banner("Backup preview")
+    meta = backup.get("meta", {})
+    project = backup.get("project", {})
+    agents = backup.get("agents", [])
+    presets = backup.get("custom_presets", {}) or {}
+    skills = backup.get("skill_names", []) or []
+
+    print(f"  Created:  {theme.color(meta.get('created_at', 'unknown'), 'muted')}")
+    print(f"  From:     {theme.color(meta.get('starling_version', 'unknown'), 'muted')}\n")
+    print(f"  Project:  {theme.color(project.get('name', '(unnamed)'), 'accent', bold=True)}")
+    print(f"  Agents:   {len(agents)}")
+    for a in agents:
+        tier = a.get("tier", "specialist")
+        tier_color = "highlight" if tier == "leader" else "accent" if tier == "coordinator" else "muted"
+        print(f"    • {theme.color(a.get('name', a.get('id', '?')), 'accent', bold=True):25s} "
+              f"({theme.color(tier, tier_color)}, {a.get('preset', '?')})")
+    if presets:
+        print(f"  Custom model presets: {len(presets)}")
+    if skills:
+        print(f"  Skills referenced:    {len(skills)} (you must reinstall skill files separately)")
+
+    # Choose to use as-is or open in wizard
+    print()
+    print("  What would you like to do?\n")
+    print(f"    {theme.color('1', 'highlight')}) Use as-is and launch {theme.color('(recommended)', 'muted')}")
+    print(f"    {theme.color('2', 'highlight')}) Edit in wizard first")
+    print(f"    {theme.color('3', 'highlight')}) Cancel")
+
+    try:
+        choice = input(theme.color("\n  Choice [1]: ", "highlight")).strip() or "1"
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if choice == "3":
+        return False
+    if choice == "2":
+        # Apply then drop into advanced wizard for edits
+        work_dir = _apply_backup(backup, use_default_work_dir=True)
+        if not work_dir:
+            return False
+        theme.info("Backup loaded. You can now edit it with the Advanced wizard.")
+        try:
+            input(theme.color("  Press Enter to continue...", "muted"))
+        except (EOFError, KeyboardInterrupt):
+            return True
+        _run_full_wizard()
+        return True
+
+    # Default: use as-is and launch
+    work_dir = _apply_backup(backup, use_default_work_dir=True)
+    if not work_dir:
+        return False
+
+    theme.clear_screen()
+    theme.banner("Import Complete!")
+    theme.success(f"Config restored from {path}")
+    print(f"  Project: {theme.color(project.get('name', '(unnamed)'), 'accent')}")
+    print(f"  Agents:  {len(agents)}")
+    print(f"  Work dir: {work_dir}\n")
+
+    # Flag missing keys
+    if presets or agents:
+        from model_wizard import load_presets
+        all_presets = load_presets()
+        missing = set()
+        for a in agents:
+            p = all_presets.get(a.get("preset", ""), {})
+            ke = p.get("api_key_env")
+            if ke and not os.environ.get(ke):
+                missing.add(ke)
+        if missing:
+            theme.warn(f"Missing API keys (add to {work_dir}/.env before running):")
+            for k in sorted(missing):
+                print(f"    • {k}")
+
+    _launch_starling_or_exit(os.path.dirname(os.path.abspath(__file__)))
+    return True
+
+
+def _load_and_validate_backup(path: str):
+    """Load a .starling file and validate its structure.
+
+    Returns:
+        (backup_dict, errors_list). If errors_list is empty, the backup is safe to apply.
+    """
+    errors = []
+    try:
+        with open(path) as f:
+            backup = json.load(f)
+    except json.JSONDecodeError as e:
+        return None, [f"Not valid JSON: {e}"]
+    except (OSError, UnicodeDecodeError) as e:
+        return None, [f"Cannot read file: {e}"]
+
+    if not isinstance(backup, dict):
+        return None, ["Backup root is not a JSON object"]
+
+    # Required top-level keys
+    if "project" not in backup:
+        errors.append("Missing 'project' section")
+    if "agents" not in backup:
+        errors.append("Missing 'agents' section")
+
+    # Validate project section (must be a dict, not null or primitive)
+    project = backup.get("project")
+    if "project" in backup and not isinstance(project, dict):
+        errors.append("'project' is not a valid object (must be a JSON object, not null/primitive)")
+
+    # Validate agents
+    agents_raw = backup.get("agents")
+    if not isinstance(agents_raw, list):
+        errors.append("'agents' is not a list")
+        agents = []
+    elif len(agents_raw) == 0:
+        errors.append("'agents' is empty — backup must contain at least one agent")
+        agents = []
+    else:
+        agents = agents_raw
+        seen_ids = set()
+        leader_count = 0
+        for i, a in enumerate(agents):
+            if not isinstance(a, dict):
+                errors.append(f"Agent #{i + 1}: not a dict")
+                continue
+            aid = a.get("id", "")
+            if not aid:
+                errors.append(f"Agent #{i + 1}: missing id")
+            elif aid in seen_ids:
+                errors.append(f"Agent #{i + 1}: duplicate id '{aid}'")
+            seen_ids.add(aid)
+
+            # Manager keyword check (security)
+            for field in ("id", "name", "role"):
+                if _contains_manager(a.get(field, "")):
+                    errors.append(
+                        f"Agent '{aid}': '{field}' contains blocked word 'manager'"
+                    )
+
+            # Tier validation
+            tier = a.get("tier", "specialist")
+            if tier not in ("specialist", "coordinator", "leader"):
+                errors.append(f"Agent '{aid}': invalid tier '{tier}'")
+            if tier == "leader":
+                leader_count += 1
+
+        if leader_count > 1:
+            errors.append(f"Multiple Leaders ({leader_count}) — only one allowed per project")
+
+    # Max agents check
+    if len(agents) > MAX_AGENTS:
+        errors.append(f"Too many agents: {len(agents)} (max {MAX_AGENTS})")
+
+    # Backup shouldn't contain secrets (sanity check — these would have been stripped by export)
+    for bad in ("bot_token", "chat_id", "api_keys"):
+        if bad in backup:
+            errors.append(
+                f"Backup contains '{bad}' — refusing to import for safety. "
+                f"Re-export with secrets stripped."
+            )
+
+    return backup, errors
+
+
+def _apply_backup(backup: dict, use_default_work_dir: bool = True) -> Optional[str]:
+    """Apply a validated backup — write project_config.json and create work dir.
+
+    Returns the resolved work_dir path, or None on failure.
+    """
+    project = backup.get("project", {})
+    work_dir = project.get("work_dir", "")
+
+    if use_default_work_dir and not work_dir:
+        name_slug = (project.get("name") or "imported").lower().replace(" ", "-")
+        work_dir = os.path.expanduser(f"~/starling-projects/{name_slug}")
+    elif work_dir:
+        work_dir = os.path.expanduser(work_dir)
+
+    if not work_dir:
+        theme.error("Could not determine work directory from backup.")
+        return None
+
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+        for sub in ("output", "memory", "skills"):
+            os.makedirs(os.path.join(work_dir, sub), exist_ok=True)
+    except OSError as e:
+        theme.error(f"Cannot create work dir {work_dir}: {e}")
+        return None
+
+    # Build config from backup
+    config = {
+        "project": {
+            "name": project.get("name", ""),
+            "description": project.get("description", ""),
+            "work_dir": work_dir,
+        },
+        "agents": backup.get("agents", []),
+        "max_agents": MAX_AGENTS,
+        "default_tasks": backup.get("default_tasks", []),
+        "routing": backup.get("routing", {"keywords": {}, "default_agent": ""}),
+    }
+
+    # Write custom model presets if any (merged with builtins via save_custom_presets)
+    custom_presets = backup.get("custom_presets") or {}
+    if custom_presets:
+        try:
+            from model_wizard import load_presets, save_custom_presets
+            existing = load_presets()
+            existing.update(custom_presets)
+            save_custom_presets(existing)
+        except Exception as e:
+            theme.warn(f"Could not import custom model presets: {e}")
+
+    config_path = os.path.join(os.path.dirname(__file__), "project_config.json")
+    try:
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+    except OSError as e:
+        theme.error(f"Cannot write config: {e}")
+        return None
+
+    return work_dir
 
 
 def _launch_starling_or_exit(project_dir: str):

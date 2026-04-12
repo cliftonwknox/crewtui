@@ -39,11 +39,18 @@ Steps:
   3. Run the setup wizard
      uv run starling setup
 
-  4. The wizard offers three paths:
+  4. The wizard first asks if you're starting fresh or importing:
+
+     New project            Start from scratch
+     Import existing config Restore from a .starling backup file
+     Quit                   Exit setup
+
+  5. For new projects, pick a setup path:
 
      Quick start   1 agent, template-based (~5 prompts, ~1 minute)
                    Ideal for your first crew or a focused single-agent setup
-     Team setup    Multiple agents with templates
+     Team setup    Multiple agents with templates, with Leader designation
+                   Each agent gets a template + model via abbreviated prompts
      Advanced      Full control over every field (traditional flow)
 
      Navigation in every step:
@@ -52,9 +59,12 @@ Steps:
        s       skip this step (only on skippable fields)
        q       quit (with confirmation)
 
-  5. On completion, the wizard offers to launch Starling immediately.
+  6. On completion, the wizard offers to launch Starling immediately.
      If a daemon is already running, it stops cleanly so the new config
      takes effect.
+
+  7. You can relaunch the wizard anytime from inside the TUI via /setup
+     The TUI will suspend, run setup, and restart with the new config.
 
 The setup wizard creates:
   - project_config.json   Your agents, tools, and routing rules
